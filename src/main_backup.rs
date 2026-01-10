@@ -32,8 +32,6 @@ pub struct Track {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct WebDAVConfig {
-    pub id: String,
-    pub name: String,
     pub url: String,
     pub username: String,
     pub password: String,
@@ -55,21 +53,17 @@ fn App() -> Element {
     let mut show_playlist_manager = use_signal(|| false);
     let mut show_directory_browser = use_signal(|| false);
     let mut show_webdav_config = use_signal(|| false);
-    let mut show_webdav_config_list = use_signal(|| false);
-    let mut show_webdav_browser = use_signal(|| false);
-    let mut webdav_configs = use_signal(|| load_webdav_configs().unwrap_or_default());
-    let mut current_webdav_config = use_signal(|| None::<usize>);
-    let mut editing_webdav_config = use_signal(|| None::<usize>);
+    let mut webdav_config = use_signal(|| WebDAVConfig {
+        url: String::new(),
+        username: String::new(),
+        password: String::new(),
+        enabled: false,
+    });
     let mut current_directory = use_signal(|| String::from(std::env::var("HOME").unwrap_or_else(|_| "/".to_string())));
     
     // Create a static-like player reference stored in component state
     // This will be created once and persist for the lifetime of the app
     let player_ref = use_signal(|| MusicPlayer::new().ok());
-    
-    // Save configs whenever they change
-    use_effect(move || {
-        let _ = save_webdav_configs(&webdav_configs());
-    });
     
     // We'll access it directly in the closures since Signal is Copy
 
@@ -94,17 +88,8 @@ fn App() -> Element {
                         }
                         button {
                             class: "px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-sm",
-                            onclick: move |_| *show_webdav_config_list.write() = true,
+                            onclick: move |_| *show_webdav_config.write() = true,
                             "☁️ WebDAV Config"
-                        }
-                        if current_webdav_config().is_some()
-                            && webdav_configs().len() > current_webdav_config().unwrap_or(0)
-                        {
-                            button {
-                                class: "px-4 py-2 bg-teal-600 hover:bg-teal-700 rounded text-sm",
-                                onclick: move |_| *show_webdav_browser.write() = true,
-                                "🌐 Browse Cloud"
-                            }
                         }
                     }
                 }
@@ -176,11 +161,7 @@ fn App() -> Element {
                                     let playlist = &playlists()[current_playlist()];
                                     if let Some(current) = current_track() {
                                         // Find current track index
-                                        if let Some(pos) = playlist
-                                            .tracks
-                                            .iter()
-                                            .position(|t| t.id == current.id)
-                                        {
+                                        if let Some(pos) = playlist.tracks.iter().position(|t| t.id == current.id) {
                                             if pos > 0 {
                                                 let prev_track = playlist.tracks[pos - 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
@@ -199,11 +180,7 @@ fn App() -> Element {
                                     let playlist = &playlists()[current_playlist()];
                                     if let Some(current) = current_track() {
                                         // Find current track index
-                                        if let Some(pos) = playlist
-                                            .tracks
-                                            .iter()
-                                            .position(|t| t.id == current.id)
-                                        {
+                                        if let Some(pos) = playlist.tracks.iter().position(|t| t.id == current.id) {
                                             if pos < playlist.tracks.len() - 1 {
                                                 let next_track = playlist.tracks[pos + 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
@@ -274,112 +251,16 @@ fn App() -> Element {
                 }
             }
 
-            if show_webdav_config_list() {
-                WebDAVConfigListModal {
-                    configs: webdav_configs(),
-                    current_config: current_webdav_config(),
-                    on_close: move |_| {
-                        *show_webdav_config_list.write() = false;
-                    },
-                    on_add_config: move |_| {
-                        *editing_webdav_config.write() = None;
-                        *show_webdav_config.write() = true;
-                    },
-                    on_edit_config: move |idx| {
-                        *editing_webdav_config.write() = Some(idx);
-                        *show_webdav_config.write() = true;
-                    },
-                    on_delete_config: move |idx| {
-                        let mut configs = webdav_configs.write();
-                        if idx < configs.len() {
-                            configs.remove(idx);
-                        }
-                        if let Some(current) = current_webdav_config() {
-                            if current >= configs.len() && !configs.is_empty() {
-                                *current_webdav_config.write() = Some(configs.len() - 1);
-                            }
-                        }
-                    },
-                    on_select_config: move |idx| {
-                        *current_webdav_config.write() = Some(idx);
-                    },
-                }
-            }
-
             if show_webdav_config() {
                 WebDAVConfigModal {
-                    config: {
-                        let editing_idx = editing_webdav_config();
-                        if let Some(idx) = editing_idx {
-                            if idx < webdav_configs().len() {
-                                webdav_configs()[idx].clone()
-                            } else {
-                                WebDAVConfig {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name: String::new(),
-                                    url: String::new(),
-                                    username: String::new(),
-                                    password: String::new(),
-                                    enabled: false,
-                                }
-                            }
-                        } else {
-                            WebDAVConfig {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                name: String::new(),
-                                url: String::new(),
-                                username: String::new(),
-                                password: String::new(),
-                                enabled: false,
-                            }
-                        }
-                    },
+                    config: webdav_config(),
                     on_close: move |_| {
                         *show_webdav_config.write() = false;
-                        *editing_webdav_config.write() = None;
                     },
-                    on_save_config: move |new_config| {
-                        let editing_idx = editing_webdav_config();
-                        if let Some(idx) = editing_idx {
-                            if idx < webdav_configs().len() {
-                                let mut configs = webdav_configs.write();
-                                configs[idx] = new_config;
-                            }
-                        } else {
-                            webdav_configs.write().push(new_config);
-                        }
+                    on_save_config: move |config| {
+                        *webdav_config.write() = config;
                         *show_webdav_config.write() = false;
-                        *editing_webdav_config.write() = None;
-                        *show_webdav_config_list.write() = true;
                     },
-                }
-            }
-
-            if show_webdav_browser() {
-                if let Some(config_idx) = current_webdav_config() {
-                    if config_idx < webdav_configs().len() {
-                        {
-                            rsx! {
-                                WebDAVBrowserModal {
-                                    config: webdav_configs()[config_idx].clone(),
-                                    on_close: move |_| {
-                                        *show_webdav_browser.write() = false;
-                                    },
-                                    on_import_folder: move |tracks: Vec<Track>| {
-                                        if playlists().len() > current_playlist() {
-                                            let mut plist = playlists()[current_playlist()].clone();
-                                            for track in tracks {
-                                                plist.add_track(track);
-                                            }
-                                            let mut lists = playlists.write();
-                                            lists[current_playlist()] = plist;
-                                        }
-                                        *show_webdav_browser.write() = false;
-                                    },
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -807,98 +688,11 @@ fn DirectoryBrowserModal(
 }
 
 #[component]
-fn WebDAVConfigListModal(
-    configs: Vec<WebDAVConfig>,
-    current_config: Option<usize>,
-    on_close: EventHandler<()>,
-    on_add_config: EventHandler<()>,
-    on_edit_config: EventHandler<usize>,
-    on_delete_config: EventHandler<usize>,
-    on_select_config: EventHandler<usize>,
-) -> Element {
-    rsx! {
-        div {
-            class: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50",
-            onclick: move |_| on_close.call(()),
-
-            div {
-                class: "bg-gray-800 rounded-lg p-6 w-full max-w-2xl shadow-xl",
-                onclick: move |e| e.stop_propagation(),
-
-                div { class: "flex justify-between items-center mb-4",
-                    h2 { class: "text-2xl font-bold", "☁️ WebDAV Servers" }
-                    button {
-                        class: "text-gray-400 hover:text-white text-2xl",
-                        onclick: move |_| on_close.call(()),
-                        "✕"
-                    }
-                }
-
-                if configs.is_empty() {
-                    div { class: "text-center py-8 text-gray-400", "No WebDAV servers configured yet" }
-                } else {
-                    div { class: "space-y-2 max-h-96 overflow-y-auto mb-4",
-                        for (idx , config) in configs.iter().enumerate() {
-                            div {
-                                class: "flex items-center justify-between p-3 rounded",
-                                class: if Some(idx) == current_config { "bg-blue-600" } else { "bg-gray-700" },
-
-                                div {
-                                    class: "flex-1 cursor-pointer",
-                                    onclick: move |_| on_select_config.call(idx),
-
-                                    div { class: "font-semibold", "{config.name}" }
-                                    p { class: "text-xs text-gray-300 truncate", "{config.url}" }
-                                    div { class: "text-xs mt-1",
-                                        if config.enabled {
-                                            span { class: "text-green-400", "✓ Enabled" }
-                                        } else {
-                                            span { class: "text-gray-400", "○ Disabled" }
-                                        }
-                                    }
-                                }
-
-                                div { class: "flex gap-2",
-                                    button {
-                                        class: "px-3 py-1 bg-blue-500 hover:bg-blue-600 rounded text-sm",
-                                        onclick: move |_| on_edit_config.call(idx),
-                                        "✎ Edit"
-                                    }
-                                    button {
-                                        class: "px-3 py-1 bg-red-500 hover:bg-red-600 rounded text-sm",
-                                        onclick: move |_| on_delete_config.call(idx),
-                                        "🗑 Delete"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                div { class: "flex gap-4 justify-between",
-                    button {
-                        class: "px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded",
-                        onclick: move |_| on_close.call(()),
-                        "Close"
-                    }
-                    button {
-                        class: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded",
-                        onclick: move |_| on_add_config.call(()),
-                        "+ Add Server"
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
 fn WebDAVConfigModal(
     config: WebDAVConfig,
     on_close: EventHandler<()>,
     on_save_config: EventHandler<WebDAVConfig>,
 ) -> Element {
-    let mut name = use_signal(|| config.name.clone());
     let mut url = use_signal(|| config.url.clone());
     let mut username = use_signal(|| config.username.clone());
     let mut password = use_signal(|| config.password.clone());
@@ -915,19 +709,9 @@ fn WebDAVConfigModal(
                 class: "bg-gray-800 rounded-lg p-6 w-full max-w-2xl shadow-xl",
                 onclick: move |e| e.stop_propagation(),
 
-                h2 { class: "text-2xl font-bold mb-4", "Add WebDAV Server" }
+                h2 { class: "text-2xl font-bold mb-4", "☁️ WebDAV Configuration" }
 
                 div { class: "space-y-4 mb-4",
-
-                    div {
-                        label { class: "block text-sm font-semibold mb-2", "Server Name" }
-                        input {
-                            class: "w-full px-4 py-2 rounded bg-gray-700 border border-gray-600 text-white",
-                            placeholder: "e.g., Nextcloud Work, Aliyun Music",
-                            value: name(),
-                            oninput: move |e| *name.write() = e.value(),
-                        }
-                    }
 
                     div {
                         label { class: "block text-sm font-semibold mb-2", "Server URL" }
@@ -970,29 +754,24 @@ fn WebDAVConfigModal(
                         label {
                             r#for: "webdav-enabled",
                             class: "text-sm font-semibold",
-                            "Enable This Server"
+                            "Enable WebDAV"
                         }
                     }
 
-                    div { class: "flex items-center gap-3 pt-2",
+                    div { class: "flex items-center gap-3",
                         button {
                             class: "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded disabled:opacity-50",
                             disabled: url().is_empty() || is_testing(),
                             onclick: move |_| {
                                 *is_testing.write() = true;
                                 *test_status.write() = None;
-
+                                
                                 let test_url = url().clone();
                                 let test_username = username().clone();
                                 let test_password = password().clone();
-
+                                
                                 spawn(async move {
-                                    let result = test_webdav_connection(
-                                            &test_url,
-                                            &test_username,
-                                            &test_password,
-                                        )
-                                        .await;
+                                    let result = test_webdav_connection(&test_url, &test_username, &test_password).await;
                                     *test_status.write() = Some(result);
                                     *is_testing.write() = false;
                                 });
@@ -1006,9 +785,7 @@ fn WebDAVConfigModal(
 
                         if let Some(is_available) = test_status() {
                             if is_available {
-                                span { class: "text-green-400 font-semibold text-lg",
-                                    "✓ Available"
-                                }
+                                span { class: "text-green-400 font-semibold text-lg", "✓ Available" }
                             } else {
                                 span { class: "text-red-400 font-semibold text-lg", "✗ Unavailable" }
                             }
@@ -1017,7 +794,7 @@ fn WebDAVConfigModal(
                 }
 
                 div { class: "text-xs text-gray-400 p-3 bg-gray-900 rounded mb-4",
-                    "Configure WebDAV servers (Nextcloud, Aliyun, etc.) to browse and access music from the cloud."
+                    "Configure your WebDAV server (Nextcloud, Aliyun, etc.) to browse and download music from the cloud."
                 }
 
                 div { class: "flex gap-4 justify-end",
@@ -1027,20 +804,17 @@ fn WebDAVConfigModal(
                         "Cancel"
                     }
                     button {
-                        class: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded disabled:opacity-50",
-                        disabled: name().is_empty() || url().is_empty(),
+                        class: "px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded",
                         onclick: move |_| {
                             on_save_config
                                 .call(WebDAVConfig {
-                                    id: config.id.clone(),
-                                    name: name(),
                                     url: url(),
                                     username: username(),
                                     password: password(),
                                     enabled: enabled(),
                                 });
                         },
-                        "✓ Add Server"
+                        "✓ Save Configuration"
                     }
                 }
             }
@@ -1077,297 +851,3 @@ async fn test_webdav_connection(url: &str, username: &str, password: &str) -> bo
         Err(_) => false,
     }
 }
-
-// Load WebDAV configs from disk
-fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>> {
-    let config_dir = get_config_dir()?;
-    let config_file = std::path::PathBuf::from(&config_dir).join("webdav_configs.json");
-    
-    if config_file.exists() {
-        let content = std::fs::read_to_string(&config_file)?;
-        let configs: Vec<WebDAVConfig> = serde_json::from_str(&content)?;
-        Ok(configs)
-    } else {
-        Ok(Vec::new())
-    }
-}
-
-// Save WebDAV configs to disk
-fn save_webdav_configs(configs: &[WebDAVConfig]) -> Result<(), Box<dyn std::error::Error>> {
-    let config_dir = get_config_dir()?;
-    std::fs::create_dir_all(&config_dir)?;
-    
-    let config_file = std::path::PathBuf::from(&config_dir).join("webdav_configs.json");
-    let json = serde_json::to_string_pretty(configs)?;
-    std::fs::write(config_file, json)?;
-    
-    Ok(())
-}
-
-// Get config directory
-fn get_config_dir() -> Result<String, Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME")?;
-    Ok(format!("{}/.dioxus_music", home))
-}
-
-#[component]
-fn WebDAVBrowserModal(
-    config: WebDAVConfig,
-    on_close: EventHandler<()>,
-    on_import_folder: EventHandler<Vec<Track>>,
-) -> Element {
-    let config = use_signal(|| config.clone());
-    let mut current_path = use_signal(|| "/".to_string());
-    let mut items = use_signal(|| Vec::new());
-    let mut selected_items = use_signal(|| Vec::new());
-    let mut is_loading = use_signal(|| false);
-    let mut error_msg = use_signal(|| Option::<String>::None);
-
-    // Load root directory on mount
-    use_effect(move || {
-        let cfg = config();
-        let current = current_path();
-        *is_loading.write() = true;
-        
-        spawn(async move {
-            match load_webdav_folder(&cfg, &current).await {
-                Ok(folder_items) => {
-                    *items.write() = folder_items;
-                    *error_msg.write() = None;
-                }
-                Err(e) => {
-                    *error_msg.write() = Some(format!("加载失败: {}", e));
-                }
-            }
-            *is_loading.write() = false;
-        });
-    });
-
-    rsx! {
-        div {
-            class: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50",
-            onclick: move |_| on_close.call(()),
-
-            div {
-                class: "bg-gray-800 rounded-lg p-6 w-full max-w-4xl max-h-96 shadow-xl overflow-y-auto",
-                onclick: move |e| e.stop_propagation(),
-
-                div { class: "flex justify-between items-center mb-4",
-                    h2 { class: "text-2xl font-bold", "🌐 Browse {config().name}" }
-                    button {
-                        class: "text-gray-400 hover:text-white text-2xl",
-                        onclick: move |_| on_close.call(()),
-                        "✕"
-                    }
-                }
-
-                div { class: "bg-gray-700 rounded p-3 mb-4 text-sm break-all", "{current_path()}" }
-
-                if let Some(err) = error_msg() {
-                    div { class: "bg-red-900 text-red-200 p-3 rounded mb-4 text-sm",
-                        "{err}"
-                    }
-                }
-
-                if is_loading() {
-                    div { class: "text-center py-8 text-gray-400", "🔄 Loading..." }
-                } else if items().is_empty() {
-                    div { class: "text-center py-8 text-gray-400", "No items found" }
-                } else {
-                    div { class: "space-y-1 mb-4 max-h-48 overflow-y-auto",
-                        for (idx , item) in items().into_iter().enumerate() {
-                            div {
-                                key: "{idx}",
-                                class: "flex items-center justify-between p-2 rounded hover:bg-gray-600 cursor-pointer",
-
-                                div {
-                                    class: "flex-1",
-                                    onclick: move |_| {
-                                        if item.is_dir {
-                                            let mut path = current_path();
-                                            if !path.ends_with('/') {
-                                                path.push('/');
-                                            }
-                                            path.push_str(&item.name);
-
-                                            let cfg = config();
-                                            *current_path.write() = path.clone();
-                                            *is_loading.write() = true;
-
-                                            spawn(async move {
-                                                match load_webdav_folder(&cfg, &path).await {
-                                                    Ok(folder_items) => {
-                                                        *items.write() = folder_items;
-                                                        *error_msg.write() = None;
-                                                    }
-                                                    Err(e) => {
-                                                        *error_msg.write() = Some(format!("加载失败: {}", e));
-                                                    }
-                                                }
-                                                *is_loading.write() = false;
-                                            });
-                                        }
-                                    },
-
-                                    span { class: "text-lg mr-2",
-                                        if item.is_dir {
-                                            "📁"
-                                        } else {
-                                            "🎵"
-                                        }
-                                    }
-                                    span { "{item.name}" }
-                                    if !item.is_dir {
-                                        span { class: "text-xs text-gray-400 ml-2",
-                                            "({item.size} bytes)"
-                                        }
-                                    }
-                                }
-
-                                if !item.is_dir {
-                                    input {
-                                        r#type: "checkbox",
-                                        checked: selected_items().contains(&item.path),
-                                        onchange: move |e| {
-                                            let mut sel = selected_items();
-                                            if e.checked() {
-                                                sel.push(item.path.clone());
-                                            } else {
-                                                sel.retain(|p| p != &item.path);
-                                            }
-                                            *selected_items.write() = sel;
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                div { class: "flex gap-4 justify-between",
-                    div { class: "flex gap-2",
-                        if current_path() != "/" {
-                            button {
-                                class: "px-3 py-2 bg-gray-600 hover:bg-gray-700 rounded text-sm",
-                                onclick: move |_| {
-                                    let mut path = current_path();
-                                    if path.ends_with('/') {
-                                        path.pop();
-                                    }
-                                    if let Some(pos) = path.rfind('/') {
-                                        path.truncate(pos + 1);
-                                    } else {
-                                        path = "/".to_string();
-                                    }
-
-                                    let cfg = config();
-                                    *current_path.write() = path.clone();
-                                    *is_loading.write() = true;
-
-                                    spawn(async move {
-                                        match load_webdav_folder(&cfg, &path).await {
-                                            Ok(folder_items) => {
-                                                *items.write() = folder_items;
-                                                *error_msg.write() = None;
-                                            }
-                                            Err(e) => {
-                                                *error_msg.write() = Some(format!("加载失败: {}", e));
-                                            }
-                                        }
-                                        *is_loading.write() = false;
-                                    });
-                                },
-                                "⬆ Back"
-                            }
-                        }
-                    }
-
-                    div { class: "flex gap-2",
-                        button {
-                            class: "px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded",
-                            onclick: move |_| on_close.call(()),
-                            "Close"
-                        }
-                        button {
-                            class: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded disabled:opacity-50",
-                            disabled: selected_items().is_empty() || is_loading(),
-                            onclick: move |_| {
-                                let selected = selected_items();
-                                if !selected.is_empty() {
-                                    let cfg = config();
-                                    let selected_clone = selected.clone();
-
-                                    spawn(async move {
-                                        match download_and_import_webdav_files(&cfg, &selected_clone).await {
-                                            Ok(tracks) => {
-                                                on_import_folder.call(tracks);
-                                            }
-                                            // Error handling
-                                            Err(_e) => {}
-                                        }
-                                    });
-                                }
-                            },
-                            "✓ Import ({selected_items().len()})"
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Load WebDAV folder items
-async fn load_webdav_folder(config: &WebDAVConfig, path: &str) -> Result<Vec<webdav::WebDAVItem>, Box<dyn std::error::Error>> {
-    use webdav::WebDAVClient;
-    
-    let client = WebDAVClient::new(config.url.clone())
-        .with_auth(config.username.clone(), config.password.clone());
-    
-    let items = client.list_items(path).await?;
-    
-    // Filter to show only folders and audio files
-    let filtered: Vec<webdav::WebDAVItem> = items
-        .into_iter()
-        .filter(|item| item.is_dir || is_audio_file(&item.name))
-        .collect();
-    
-    Ok(filtered)
-}
-
-// Check if file is an audio file
-fn is_audio_file(filename: &str) -> bool {
-    let lower = filename.to_lowercase();
-    AUDIO_FORMATS.iter().any(|fmt| lower.ends_with(&format!(".{}", fmt)))
-}
-
-// Download and import WebDAV files
-async fn download_and_import_webdav_files(
-    config: &WebDAVConfig,
-    file_paths: &[String],
-) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
-    let mut tracks = Vec::new();
-    let download_dir = format!("{}/.dioxus_music/downloads", std::env::var("HOME")?);
-    std::fs::create_dir_all(&download_dir)?;
-    
-    for file_path in file_paths {
-        if let Some(filename) = file_path.split('/').last() {
-            let dest_path = format!("{}/{}", download_dir, filename);
-            
-            // Download file
-            use webdav::WebDAVClient;
-            let client = WebDAVClient::new(config.url.clone())
-                .with_auth(config.username.clone(), config.password.clone());
-            
-            client.download_file(file_path, &dest_path).await?;
-            
-            // Extract metadata
-            if let Ok(track) = TrackMetadata::from_file(std::path::Path::new(&dest_path)) {
-                tracks.push(track);
-            }
-        }
-    }
-    
-    Ok(tracks)
-}
-
