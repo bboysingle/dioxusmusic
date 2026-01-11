@@ -1,4 +1,4 @@
-use crate::Track;
+use crate::{Track, TrackStub};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use uuid::Uuid;
@@ -7,7 +7,7 @@ use uuid::Uuid;
 pub struct Playlist {
     pub id: String,
     pub name: String,
-    pub tracks: Vec<Track>,
+    pub tracks: Vec<TrackStub>,
 }
 
 impl Playlist {
@@ -19,8 +19,13 @@ impl Playlist {
         }
     }
 
-    pub fn add_track(&mut self, track: Track) {
+    pub fn add_track(&mut self, track: TrackStub) {
         self.tracks.push(track);
+    }
+
+    pub fn get_track(&self, track_id: &str) -> Option<Track> {
+        self.tracks.iter().find(|t| t.id == track_id)
+            .and_then(|stub| crate::TrackMetadata::from_file(std::path::Path::new(&stub.path)).ok())
     }
 
     pub fn remove_track(&mut self, track_id: &str) {

@@ -1610,6 +1610,7 @@ dependencies = [
  "dioxus",
  "id3",
  "metaflac",
+ "mp3-duration",
  "parking_lot",
  "reqwest 0.11.27",
  "rfd 0.12.1",
@@ -1617,6 +1618,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "urlencoding",
  "uuid",
  "walkdir",
 ]
@@ -3409,6 +3411,15 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mp3-duration"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "348bdc7300502f0801e5b57c448815713cd843b744ef9bda252a2698fdf90a0f"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]
