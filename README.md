@@ -4,7 +4,7 @@ A full-featured music player built with Dioxus 0.7 and Rust. Play local music fi
 
 ## Features
 
-### ✅ Implemented Features
+### ✅  Features
 
 - [x] **Play local music files** - Support for MP3, WAV, FLAC, OGG, M4A formats using Rodio
 - [x] **Control music playback** - Play, pause, stop, and seek controls
@@ -16,7 +16,7 @@ A full-featured music player built with Dioxus 0.7 and Rust. Play local music fi
 - [x] **Track metadata extraction** - Extract metadata from MP3 (ID3v2) and FLAC tags
 - [x] **WebDAV support** - Browse, download, and upload music from WebDAV servers (Nextcloud, Aliyun, etc.)
 - [x] **Music library scanning** - Recursively scan directories for audio files
-- [x] **Progress bar** - Visual progress indicator with current/total time display
+- [] **Progress bar** - Visual progress indicator with current/total time display
 - [x] **Track selection UI** - Click to play any track in the playlist
 
 ### 🎨 UI Components
