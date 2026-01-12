@@ -13,6 +13,23 @@ use walkdir::WalkDir;
 use uuid::Uuid;
 use std::sync::{Arc, Mutex};
 
+fn load_header_icon() -> Option<String> {
+    std::fs::read("assets/rmusic.ico")
+        .ok()
+        .and_then(|data| {
+            image::load_from_memory_with_format(&data, image::ImageFormat::Ico).ok()
+        })
+        .and_then(|image| {
+            let rgba = image.to_rgba8();
+            dioxus_desktop::tao::window::Icon::from_rgba(rgba.into_raw(), image.width(), image.height()).ok()
+        })
+        .and_then(|_| {
+            let data = std::fs::read("assets/rmusic.ico").ok()?;
+            let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+            Some(format!("data:image/x-icon;base64,{}", base64))
+        })
+}
+
 // Global state for auto-play detection - shared across threads
 #[derive(Clone, Default)]
 pub struct GlobalPlayerState {
@@ -96,7 +113,49 @@ pub struct WebDAVConfig {
 }
 
 fn main() {
-    dioxus::launch(App);
+    use dioxus::prelude::VirtualDom;
+    use dioxus_desktop::{Config, WindowBuilder};
+
+    let icon_path = std::path::Path::new("assets/rmusic.ico");
+
+    eprintln!("[DEBUG] Icon exists: {}", icon_path.exists());
+
+    let icon = std::fs::read(icon_path)
+        .ok()
+        .and_then(|data| {
+            eprintln!("[DEBUG] Icon file size: {} bytes", data.len());
+
+            let images = image::load_from_memory_with_format(&data, image::ImageFormat::Ico).ok()?;
+
+            eprintln!("[DEBUG] Image dimensions: {}x{}", images.width(), images.height());
+
+            let rgba = images.to_rgba8();
+            let (width, height) = (images.width(), images.height());
+
+            eprintln!("[DEBUG] Creating icon {}x{}", width, height);
+
+            dioxus_desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
+        });
+
+    if icon.is_none() {
+        eprintln!("[DEBUG] Failed to load icon");
+    } else {
+        eprintln!("[DEBUG] Icon loaded successfully");
+    }
+
+    let mut window = WindowBuilder::new()
+        .with_title("Dioxus Music Player")
+        .with_inner_size(dioxus_desktop::tao::dpi::LogicalSize::new(1200.0, 800.0));
+
+    if let Some(icon) = icon {
+        window = window.with_window_icon(Some(icon));
+        eprintln!("[DEBUG] Icon set on window");
+    }
+
+    let cfg = Config::default()
+        .with_window(window);
+
+    dioxus_desktop::launch::launch_virtual_dom(VirtualDom::new(App), cfg);
 }
 
 #[component]
@@ -207,6 +266,8 @@ fn App() -> Element {
     
     // We'll access it directly in the closures since Signal is Copy
 
+    let header_icon = use_signal(|| load_header_icon());
+
     rsx! {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
@@ -216,7 +277,18 @@ fn App() -> Element {
 
             header { class: "bg-gray-800 shadow-lg p-6",
                 div { class: "max-w-7xl mx-auto",
-                    h1 { class: "text-4xl font-bold mb-2", "🎵 Dioxus Music Player" }
+                    h1 { class: "text-4xl font-bold mb-2 flex items-center gap-3",
+                        if let Some(icon_url) = header_icon.read().as_ref() {
+                            img {
+                                src: "{icon_url}",
+                                alt: "Music Player Icon",
+                                class: "w-8 h-8",
+                            }
+                        } else {
+                            span { "🎵" }
+                        }
+                        "Dioxus Music Player"
+                    }
                     p { class: "text-gray-400",
                         "Control your music with play, pause, seek, and playlist management"
                     }

@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = [] }
+dioxus-desktop = "0.7"
 rodio = "0.18"
 metaflac = "0.2"
 id3 = "1.16"
@@ -23,6 +24,7 @@ urlencoding = "2"
 rfd = { version = "0.12", features = ["xdg-portal"] }
 parking_lot = "0.12"
 mp3-duration = "0.1"
+image = "0.25"
 
 [features]
 default = ["desktop"]
