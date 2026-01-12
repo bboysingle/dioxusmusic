@@ -216,7 +216,13 @@ impl MusicPlayer {
 
             let response = response.unwrap();
 
+            eprintln!("[Player] Windows调试: HTTP状态码 = {}", response.status());
+            if let Some(content_length) = response.content_length() {
+                eprintln!("[Player] Windows调试: Content-Length = {} bytes", content_length);
+            }
+
             if !response.status().is_success() {
+                eprintln!("[Player] Windows调试: 下载失败，HTTP状态码非200");
                 let _ = tx.send(Err(format!("下载失败 (HTTP {})", response.status())));
                 return;
             }
@@ -232,23 +238,27 @@ impl MusicPlayer {
             let bytes = response.bytes();
 
             if let Err(e) = bytes {
+                eprintln!("[Player] Windows调试: 读取音频数据失败: {}", e);
                 let _ = tx.send(Err(format!("读取音频数据失败: {}", e)));
                 return;
             }
 
             let bytes = bytes.unwrap();
+            eprintln!("[Player] Windows调试: 下载到 {} bytes", bytes.len());
 
             if bytes.is_empty() {
+                eprintln!("[Player] Windows调试: 下载的音频数据为空");
                 let _ = tx.send(Err("音频文件为空".to_string()));
                 return;
             }
 
             if let Err(e) = std::fs::write(&temp_path, &bytes) {
+                eprintln!("[Player] Windows调试: 保存文件失败: {}", e);
                 let _ = tx.send(Err(format!("无法保存临时文件: {}", e)));
                 return;
             }
 
-            eprintln!("[Player] 已保存临时文件: {:?}", temp_path);
+            eprintln!("[Player] Windows调试: 已保存临时文件: {:?} ({} bytes)", temp_path, bytes.len());
             let _ = tx.send(Ok(temp_path));
         });
 

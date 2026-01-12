@@ -266,15 +266,36 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
         
         // 过滤根目录
         if !href.is_empty() && href != "/" && !name.is_empty() {
-            // 计算相对路径
-            let item_path = if href.starts_with(base_url) {
+            // base_url 是配置的 URL（如 http://x:5244/dav/tianyi）
+            // href 是服务器返回的完整路径（如 /dav/tianyi/音乐/xxx.mp3）
+            // item_path 应该是相对于当前浏览目录的路径（不包括配置的子目录前缀）
+            let item_path = if href.starts_with("/dav/") {
+                // 去掉 /dav/ 前缀
+                let after_dav = &href[5..];
+
+                // 提取 base_url 中的子目录部分（如 tianyi）
+                let base_sub_path = if let Some(pos) = base_url.find("/dav/") {
+                    let after_base_dav = &base_url[pos + 5..]; // 去掉 /dav
+                    after_base_dav.trim_start_matches('/').to_string()
+                } else {
+                    String::new()
+                };
+
+                // 如果 after_dav 以 base_sub_path 开头，去掉它
+                if !base_sub_path.is_empty() && after_dav.starts_with(&base_sub_path) {
+                    let after_base = &after_dav[base_sub_path.len()..];
+                    after_base.trim_start_matches('/').to_string()
+                } else {
+                    after_dav.to_string()
+                }
+            } else if href.starts_with(base_url) {
                 href[base_url.len()..].to_string()
-            } else if href.starts_with("/dav/") {
-                href[5..].to_string()
             } else {
                 href.trim_start_matches('/').to_string()
             };
-            
+
+            eprintln!("[WebDAV] item_path='{}'", item_path);
+
             items.push(WebDAVItem {
                 name,
                 path: item_path,
@@ -284,7 +305,7 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
             });
         }
     }
-    
+
     items
 }
 

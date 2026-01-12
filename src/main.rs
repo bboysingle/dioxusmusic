@@ -2093,15 +2093,34 @@ async fn create_webdav_placeholder_tracks(
     
     for path_str in file_paths {
         let full_url = if path_str.starts_with("http") {
-            let mut u = reqwest::Url::parse(path_str)?;
-            if !base_url.username().is_empty() {
-                u.set_username(base_url.username()).ok();
-                u.set_password(base_url.password()).ok();
-            }
-            u.to_string()
+            path_str.to_string()
         } else {
-            base_url.join(path_str)?.to_string()
+            // 构建包含认证信息的完整 URL
+            // config.url = http://192.168.2.5:5244/dav/tianyi
+            // 完整 URL = http://username:password@192.168.2.5:5244/dav/tianyi/音乐/xxx.flac
+            let base = config.url.trim_end_matches('/');
+
+            // 找到协议后的位置
+            let proto_end = base.find("://").map(|p| p + 3).unwrap_or(0);
+
+            // 找到路径开始位置
+            let path_start = base[proto_end..].find('/').map(|p| proto_end + p).unwrap_or(base.len());
+
+            let host_port = &base[proto_end..path_start];
+            let base_path = &base[path_start..];
+
+            let auth_part = if !config.username.is_empty() {
+                format!("{}:{}@", config.username, config.password)
+            } else {
+                String::new()
+            };
+
+            format!("{}{}{}{}{}{}", &base[..proto_end], auth_part, host_port, base_path,
+                if path_str.starts_with('/') { "" } else { "/" },
+                path_str)
         };
+
+        eprintln!("[WebDAV DEBUG] full_url='{}'", full_url);
         
         let filename = path_str.split('/').last().unwrap_or("Unknown");
         let decoded_filename = match urlencoding::decode(filename) {
@@ -2238,6 +2257,8 @@ async fn fetch_webdav_track_metadata(
         }
         u.to_string()
     } else {
+        // path 是相对于 base_url 的路径
+        // base_url 已经包含配置中的子目录路径
         base_url.join(path)?.to_string()
     };
     
