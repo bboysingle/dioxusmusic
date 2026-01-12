@@ -266,26 +266,49 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
         
         // 过滤根目录
         if !href.is_empty() && href != "/" && !name.is_empty() {
-            // base_url 是配置的 URL（如 http://x:5244/dav/tianyi）
-            // href 是服务器返回的完整路径（如 /dav/tianyi/音乐/xxx.mp3）
-            // item_path 应该是相对于当前浏览目录的路径（不包括配置的子目录前缀）
+            // base_url 是配置的 URL（如 http://x:5244/dav/tianyi/音乐）
+            // href 是服务器返回的完整路径（如 /dav/tianyi/音乐/a最爱/xxx.mp3）
+            // 注意：href 中的路径是 URL 编码的，需要编码后进行比较
+
             let item_path = if href.starts_with("/dav/") {
                 // 去掉 /dav/ 前缀
                 let after_dav = &href[5..];
 
-                // 提取 base_url 中的子目录部分（如 tianyi）
+                // 提取 base_url 中的完整子目录路径（如 tianyi/音乐）
                 let base_sub_path = if let Some(pos) = base_url.find("/dav/") {
                     let after_base_dav = &base_url[pos + 5..]; // 去掉 /dav
-                    after_base_dav.trim_start_matches('/').to_string()
+                    let clean_path = after_base_dav.trim_start_matches('/');
+
+                    // 只编码中文字符，保留 /
+                    let encoded: String = clean_path
+                        .replace('/', "\x00")
+                        .chars()
+                        .map(|c| {
+                            if c == '\x00' {
+                                "/".to_string()
+                            } else if c.is_ascii() {
+                                c.to_string()
+                            } else {
+                                urlencoding::encode(&c.to_string()).into_owned()
+                            }
+                        })
+                        .collect();
+                    encoded
                 } else {
                     String::new()
                 };
 
-                // 如果 after_dav 以 base_sub_path 开头，去掉它
+                eprintln!("[WebDAV DEBUG] base_sub_path(encoded)='{}'", base_sub_path);
+                eprintln!("[WebDAV DEBUG] after_dav='{}'", after_dav);
+
+                // 如果 base_sub_path 不为空且 after_dav 以它开头，去掉它
                 if !base_sub_path.is_empty() && after_dav.starts_with(&base_sub_path) {
                     let after_base = &after_dav[base_sub_path.len()..];
-                    after_base.trim_start_matches('/').to_string()
+                    let result = after_base.trim_start_matches('/').to_string();
+                    eprintln!("[WebDAV DEBUG] 匹配成功，item_path='{}'", result);
+                    result
                 } else {
+                    eprintln!("[WebDAV DEBUG] 不匹配，保留 after_dav='{}'", after_dav);
                     after_dav.to_string()
                 }
             } else if href.starts_with(base_url) {
@@ -294,7 +317,7 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
                 href.trim_start_matches('/').to_string()
             };
 
-            eprintln!("[WebDAV] item_path='{}'", item_path);
+            eprintln!("[WebDAV DEBUG] 最终 item_path='{}'", item_path);
 
             items.push(WebDAVItem {
                 name,

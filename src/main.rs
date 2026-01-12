@@ -2144,8 +2144,6 @@ async fn create_webdav_placeholder_tracks(
                 path_str)
         };
 
-        eprintln!("[WebDAV DEBUG] full_url='{}'", full_url);
-        
         let filename = path_str.split('/').last().unwrap_or("Unknown");
         let decoded_filename = match urlencoding::decode(filename) {
             Ok(cow) => cow.into_owned(),
