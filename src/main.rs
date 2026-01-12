@@ -483,7 +483,10 @@ fn App() -> Element {
 
                     section { class: "col-span-2",
 
-                        NowPlayingCard { current_track: current_track() }
+                        NowPlayingCard {
+                            current_track: current_track(),
+                            player_ref: player_ref.clone(),
+                        }
 
                         // Error message display
                         if let Some(err) = error_msg() {
@@ -811,60 +814,81 @@ fn App() -> Element {
 }
 
 #[component]
-fn NowPlayingCard(current_track: Option<TrackStub>) -> Element {
+fn NowPlayingCard(
+    current_track: Option<TrackStub>,
+    player_ref: Signal<Option<player::MusicPlayer>>,
+) -> Element {
     let full_track: Option<Track> = current_track.as_ref().map(|stub| {
-        let mut track = crate::metadata::TrackMetadata::from_file(std::path::Path::new(&stub.path))
-            .unwrap_or_else(|_| Track {
-                id: stub.id.clone(),
-                path: stub.path.clone(),
-                title: stub.title.clone(),
-                artist: stub.artist.clone(),
-                album: stub.album.clone(),
-                duration: stub.duration,
-                cover: None,
-            });
-            
-        // Prioritize stub info for text fields as it might have been cleaned up/decoded
-        track.title = stub.title.clone();
-        track.artist = stub.artist.clone();
-        track.album = stub.album.clone();
-        
-        track
+        Track {
+            id: stub.id.clone(),
+            path: stub.path.clone(),
+            title: stub.title.clone(),
+            artist: stub.artist.clone(),
+            album: stub.album.clone(),
+            duration: stub.duration,
+            cover: None,
+        }
     });
-    
-    let cover_img = full_track.as_ref().and_then(|track| {
-        track.cover.as_ref().map(|cover_data| {
+
+    let mut player_metadata: Signal<Option<player::TrackMetadata>> = use_signal(|| None);
+
+    let _metadata_future = use_future(move || {
+        let player_ref = player_ref.clone();
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                if let Some(ref player) = *player_ref.read() {
+                    if let Some(metadata) = player.get_current_metadata() {
+                        *player_metadata.write() = Some(metadata);
+                    }
+                }
+            }
+        }
+    });
+
+    let cover_img = player_metadata().as_ref()
+        .and_then(|m| m.cover.as_ref())
+        .or_else(|| full_track.as_ref().and_then(|t| t.cover.as_ref()))
+        .map(|cover_data| {
             let base64_cover = base64_encode(cover_data);
             format!("data:image/jpeg;base64,{}", base64_cover)
-        })
-    });
+        });
+
+    let display_title = player_metadata().as_ref()
+        .and_then(|m| m.title.clone())
+        .or_else(|| full_track.as_ref().map(|t| t.title.clone()))
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let display_artist = player_metadata().as_ref()
+        .and_then(|m| m.artist.clone())
+        .or_else(|| full_track.as_ref().map(|t| t.artist.clone()))
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+
+    let display_album = player_metadata().as_ref()
+        .and_then(|m| m.album.clone())
+        .or_else(|| full_track.as_ref().map(|t| t.album.clone()))
+        .unwrap_or_else(|| "Unknown Album".to_string());
 
     rsx! {
         div { class: "bg-gray-800 rounded-lg p-8 mb-6 text-center",
 
-            if let Some(track) = full_track {
-                if let Some(img_src) = cover_img {
-                    div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg overflow-hidden",
-                        img {
-                            src: img_src,
-                            alt: "Album cover",
-                            class: "w-full h-full object-cover",
-                        }
-                    }
-                } else {
-                    div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg bg-gray-700 flex items-center justify-center text-4xl",
-                        "🎵"
+            if let Some(img_src) = cover_img {
+                div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg overflow-hidden",
+                    img {
+                        src: img_src,
+                        alt: "Album cover",
+                        class: "w-full h-full object-cover",
                     }
                 }
-                h2 { class: "text-2xl font-bold mb-2", "{track.title}" }
-                p { class: "text-gray-400 mb-1", "{track.artist}" }
-                p { class: "text-gray-500 text-sm", "{track.album}" }
             } else {
                 div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg bg-gray-700 flex items-center justify-center text-4xl",
                     "🎵"
                 }
-                p { class: "text-gray-400", "No track selected" }
             }
+            h2 { class: "text-2xl font-bold mb-2", "{display_title}" }
+            p { class: "text-gray-400 mb-1", "{display_artist}" }
+            p { class: "text-gray-500 text-sm", "{display_album}" }
         }
     }
 }

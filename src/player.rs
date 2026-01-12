@@ -1,4 +1,4 @@
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,76 @@ pub struct Track {
     pub album: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub struct TrackMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub cover: Option<Vec<u8>>,
+    pub duration: Duration,
+}
+
+impl TrackMetadata {
+    pub fn from_path(path: &Path) -> Self {
+        use id3::{Tag, TagLike};
+        use metaflac::Tag as FlacTag;
+
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let mut metadata = TrackMetadata::default();
+
+        // Try ID3 tags first (MP3, M4A)
+        if let Ok(tag) = Tag::read_from_path(path).or_else(|_| {
+            let file = File::open(path)?;
+            Tag::read_from(file)
+        }) {
+            metadata.title = tag.title().map(|t| t.to_string()).or(Some(file_name.clone()));
+            metadata.artist = tag.artist().map(|a| a.to_string());
+            metadata.album = tag.album().map(|a| a.to_string());
+            metadata.cover = tag.pictures().next().map(|pic| pic.data.clone());
+        }
+
+        // Try FLAC tags
+        if metadata.title.is_none() || metadata.artist.is_none() {
+            if let Ok(tag) = FlacTag::read_from_path(path) {
+                if let Some(vorbis) = tag.vorbis_comments() {
+                    if metadata.title.is_none() {
+                        metadata.title = vorbis.title()
+                            .and_then(|v| v.first().cloned())
+                            .or(Some(file_name.clone()));
+                    }
+                    if metadata.artist.is_none() {
+                        metadata.artist = vorbis.artist().and_then(|v| v.first().cloned());
+                    }
+                    if metadata.album.is_none() {
+                        metadata.album = vorbis.album().and_then(|v| v.first().cloned());
+                    }
+                }
+                if metadata.cover.is_none() {
+                    metadata.cover = tag.pictures().next().map(|pic| pic.data.clone());
+                }
+            }
+        }
+
+        // Get duration
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file);
+            if let Ok(source) = Decoder::new(reader) {
+                metadata.duration = source.total_duration().unwrap_or(Duration::from_secs(0));
+            }
+        }
+
+        if metadata.title.is_none() {
+            metadata.title = Some(file_name);
+        }
+
+        metadata
+    }
+}
+
 pub struct MusicPlayer {
     sink: Arc<Mutex<Option<Sink>>>,
     _stream: OutputStream,
@@ -40,6 +110,7 @@ pub struct MusicPlayer {
     last_elapsed: Arc<Mutex<std::time::Instant>>,
     pub stopped_by_user: Arc<Mutex<bool>>,
     is_playing: Arc<Mutex<bool>>,
+    current_metadata: Arc<Mutex<Option<TrackMetadata>>>,
 }
 
 impl MusicPlayer {
@@ -64,6 +135,7 @@ impl MusicPlayer {
             last_elapsed: Arc::new(Mutex::new(std::time::Instant::now())),
             stopped_by_user: Arc::new(Mutex::new(false)),
             is_playing: Arc::new(Mutex::new(false)),
+            current_metadata: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -275,6 +347,12 @@ impl MusicPlayer {
             Decoder::new(buf_reader)
         }) {
             Ok(Ok(source)) => {
+                // 下载成功后提取 metadata
+                let metadata = TrackMetadata::from_path(&temp_path);
+                eprintln!("[Player] 提取到元数据: title={:?}, artist={:?}, album={:?}, duration={:?}",
+                    metadata.title, metadata.artist, metadata.album, metadata.duration);
+                self.update_metadata(metadata);
+
                 if let Ok(mut temp_guard) = self.temp_file.lock() {
                     if let Some(old_temp) = temp_guard.take() {
                         let _ = std::fs::remove_file(&old_temp);
@@ -404,6 +482,15 @@ impl MusicPlayer {
             return elapsed;
         }
         *self.current_time.lock().unwrap()
+    }
+
+    pub fn get_current_metadata(&self) -> Option<TrackMetadata> {
+        self.current_metadata.lock().unwrap().clone()
+    }
+
+    pub fn update_metadata(&self, metadata: TrackMetadata) {
+        *self.current_metadata.lock().unwrap() = Some(metadata.clone());
+        eprintln!("[Player] 已更新元数据: {:?}", metadata.title);
     }
     
     pub fn set_duration(&self, duration: Duration) {
