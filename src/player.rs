@@ -141,24 +141,31 @@ impl MusicPlayer {
 
     pub fn play(&self, path: &Path, track_id: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
         *self.is_playing.lock().unwrap() = true;
-        
+
         if let Some(id) = track_id {
             if let Ok(mut guard) = self.last_track_id.lock() {
                 *guard = Some(id);
             }
         }
-        
+
         let path_str = path.to_string_lossy();
         let extension = path.extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("")
             .to_lowercase();
 
-        let source: Box<dyn rodio::Source<Item = i16> + Send> = if path_str.starts_with("http://") || path_str.starts_with("https://") {
-            self.play_remote_url(&path_str)?
+        let (source, duration) = if path_str.starts_with("http://") || path_str.starts_with("https://") {
+            let source = self.play_remote_url(&path_str)?;
+            let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
+            (Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>, duration)
         } else {
-            self.play_local_file(path, &extension)?
+            let source = self.play_local_file(path, &extension)?;
+            let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
+            (source, duration)
         };
+
+        // Set duration
+        self.set_duration(duration);
 
         if let Ok(sink_guard) = self.sink.lock() {
             if let Some(sink) = sink_guard.as_ref() {

@@ -163,6 +163,7 @@ fn App() -> Element {
     let mut player_state = use_signal(|| PlayerState::Stopped);
     let mut current_track = use_signal(|| None::<TrackStub>);
     let mut current_time = use_signal(|| Duration::from_secs(0));
+    let mut current_duration = use_signal(|| Duration::from_secs(0));
     let mut volume = use_signal(|| 0.7);
     let mut playlists = use_signal(|| vec![Playlist::new("My Playlist".to_string())]);
     let mut current_playlist = use_signal(|| 0);
@@ -176,9 +177,10 @@ fn App() -> Element {
     let mut editing_webdav_config = use_signal(|| None::<usize>);
     let mut current_directory = use_signal(|| String::from(std::env::var("HOME").unwrap_or_else(|_| "/".to_string())));
     let mut error_msg = use_signal(|| None::<String>);
-    
-    // Provide current_time as context for child components
+
+    // Provide current_time and duration as context for child components
     provide_context(current_time);
+    provide_context(current_duration);
 
     // WebDAV Browser State
     let mut webdav_current_path = use_signal(|| "/".to_string());
@@ -207,13 +209,17 @@ fn App() -> Element {
         async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                
+
                 let player_guard = player_ref_clone.read();
                 if let Some(player) = player_guard.as_ref() {
                     // Update current time
                     let elapsed = player.get_elapsed();
                     *current_time.write() = elapsed;
-                    
+
+                    // Sync duration from player
+                    let duration = player.get_duration();
+                    *current_duration.write() = duration;
+
                     // Check for track end
                     let is_ended = *player.track_ended.lock().unwrap();
                     let was_stopped_by_user = *player.stopped_by_user.lock().unwrap();
@@ -574,7 +580,7 @@ fn App() -> Element {
 
                         PlayerControls {
                             state: player_state(),
-                            duration: current_track().as_ref().map(|t| t.duration),
+                            duration: Some(current_duration()),
                             volume: volume(),
                             current_time,
                             on_play: move |_| {
@@ -979,18 +985,19 @@ fn PlayerControls(
     on_previous: EventHandler<()>,
     on_next: EventHandler<()>,
 ) -> Element {
-    let ct = current_time();
-    let formatted_time = format_duration(ct);
-    let formatted_duration = duration.map(format_duration).unwrap_or_else(|| "0:00".to_string());
     let progress_percent = if let Some(d) = duration {
         if d.as_secs() > 0 {
-            (ct.as_secs_f64() / d.as_secs_f64() * 100.0) as i32
+            let ct = current_time();
+            (ct.as_secs_f64() / d.as_secs_f64() * 100.0).clamp(0.0, 100.0) as i32
         } else {
             0
         }
     } else {
         0
     };
+
+    let formatted_time = format_duration(current_time());
+    let formatted_duration = duration.map(format_duration).unwrap_or_else(|| "0:00".to_string());
 
     rsx! {
         div { class: "bg-gray-800 rounded-lg p-6 mb-6",
@@ -1000,9 +1007,9 @@ fn PlayerControls(
                     r#type: "range",
                     min: "0",
                     max: "100",
-                    value: progress_percent,
-                    class: "w-full h-2 bg-gray-700 rounded-full appearance-none cursor-pointer",
-                    style: "background: linear-gradient(to right, #3b82f6 {progress_percent}%, #374151 {progress_percent}%);",
+                    value: "{progress_percent}",
+                    class: "w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer",
+                    style: "accent-color: #3b82f6;",
                     oninput: move |e| {
                         if let Some(d) = duration {
                             let percent = e.value().parse::<f64>().unwrap_or(0.0) / 100.0;
