@@ -1,6 +1,6 @@
 use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
-use std::io::{BufReader, Cursor, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -111,6 +111,9 @@ pub struct MusicPlayer {
     pub stopped_by_user: Arc<Mutex<bool>>,
     is_playing: Arc<Mutex<bool>>,
     current_metadata: Arc<Mutex<Option<TrackMetadata>>>,
+    downloaded_bytes: Arc<Mutex<u64>>,
+    total_bytes: Arc<Mutex<u64>>,
+    is_remote: Arc<Mutex<bool>>,
 }
 
 impl MusicPlayer {
@@ -136,6 +139,9 @@ impl MusicPlayer {
             stopped_by_user: Arc::new(Mutex::new(false)),
             is_playing: Arc::new(Mutex::new(false)),
             current_metadata: Arc::new(Mutex::new(None)),
+            downloaded_bytes: Arc::new(Mutex::new(0)),
+            total_bytes: Arc::new(Mutex::new(0)),
+            is_remote: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -268,9 +274,15 @@ impl MusicPlayer {
         let temp_path = temp_dir.join(&temp_filename);
 
         let (tx, rx) = std::sync::mpsc::channel();
+        let progress_sender = Arc::new(std::sync::Mutex::new(0u64));
+        let total_sender = Arc::new(std::sync::Mutex::new(0u64));
+        let player_progress = self.downloaded_bytes.clone();
+        let player_total = self.total_bytes.clone();
 
+        let progress_clone = progress_sender.clone();
+        let total_clone = total_sender.clone();
         let _ = std::thread::spawn(move || {
-            let result = std::fs::write(&temp_path, vec![]); // Create file first
+            let result = std::fs::write(&temp_path, vec![]);
             if result.is_err() {
                 let _ = tx.send(Err(format!("无法创建临时文件: {:?}", result)));
                 return;
@@ -295,18 +307,13 @@ impl MusicPlayer {
 
             let response = response.unwrap();
 
-            eprintln!("[Player] Windows调试: HTTP状态码 = {}", response.status());
-            if let Some(content_length) = response.content_length() {
-                eprintln!("[Player] Windows调试: Content-Length = {} bytes", content_length);
-            }
-
             if !response.status().is_success() {
-                eprintln!("[Player] Windows调试: 下载失败，HTTP状态码非200");
                 let _ = tx.send(Err(format!("下载失败 (HTTP {})", response.status())));
                 return;
             }
 
             let content_length = response.content_length().unwrap_or(0);
+            *total_clone.lock().unwrap() = content_length;
 
             if content_length > MAX_FILE_SIZE {
                 let _ = tx.send(Err(format!("文件过大 ({}MB)，当前不支持播放超过 {}MB 的音频文件",
@@ -314,47 +321,54 @@ impl MusicPlayer {
                 return;
             }
 
-            let bytes = response.bytes();
+            let mut downloaded = 0;
+            {
+                let mut file = std::fs::File::create(&temp_path).map_err(|e| {
+                    let _ = tx.send(Err(format!("无法创建临时文件: {}", e)));
+                    return;
+                }).unwrap();
 
-            if let Err(e) = bytes {
-                eprintln!("[Player] Windows调试: 读取音频数据失败: {}", e);
-                let _ = tx.send(Err(format!("读取音频数据失败: {}", e)));
-                return;
+                let bytes = response.bytes().map_err(|e| {
+                    let _ = tx.send(Err(format!("读取音频数据失败: {}", e)));
+                    return;
+                }).unwrap();
+
+                let bytes_vec = bytes.to_vec();
+
+                if let Err(e) = file.write_all(&bytes_vec) {
+                    let _ = tx.send(Err(format!("写入文件失败: {}", e)));
+                    return;
+                }
+                downloaded = bytes_vec.len() as u64;
+                *progress_clone.lock().unwrap() = downloaded;
+                *player_progress.lock().unwrap() = downloaded;
+                *player_total.lock().unwrap() = content_length;
             }
 
-            let bytes = bytes.unwrap();
-            eprintln!("[Player] Windows调试: 下载到 {} bytes", bytes.len());
-
-            if bytes.is_empty() {
-                eprintln!("[Player] Windows调试: 下载的音频数据为空");
+            if downloaded == 0 {
                 let _ = tx.send(Err("音频文件为空".to_string()));
                 return;
             }
 
-            if let Err(e) = std::fs::write(&temp_path, &bytes) {
-                eprintln!("[Player] Windows调试: 保存文件失败: {}", e);
-                let _ = tx.send(Err(format!("无法保存临时文件: {}", e)));
-                return;
-            }
-
-            eprintln!("[Player] Windows调试: 已保存临时文件: {:?} ({} bytes)", temp_path, bytes.len());
             let _ = tx.send(Ok(temp_path));
         });
 
-        let temp_path = rx.recv_timeout(std::time::Duration::from_secs(60))
+        let temp_path = rx.recv_timeout(std::time::Duration::from_secs(120))
             .map_err(|e| format!("下载超时: {}", e))?
             .map_err(|e| e)?;
+
+        *self.downloaded_bytes.lock().unwrap() = 0;
+        *self.total_bytes.lock().unwrap() = 0;
 
         let file = File::open(&temp_path)
             .map_err(|e| format!("无法打开临时文件: {}", e))?;
 
         let buf_reader = BufReader::new(file);
-        
+
         match std::panic::catch_unwind(|| {
             Decoder::new(buf_reader)
         }) {
             Ok(Ok(source)) => {
-                // 下载成功后提取 metadata
                 let metadata = TrackMetadata::from_path(&temp_path);
                 eprintln!("[Player] 提取到元数据: title={:?}, artist={:?}, album={:?}, duration={:?}",
                     metadata.title, metadata.artist, metadata.album, metadata.duration);
@@ -495,6 +509,33 @@ impl MusicPlayer {
         self.current_metadata.lock().unwrap().clone()
     }
 
+    pub fn get_download_progress(&self) -> f64 {
+        let downloaded = *self.downloaded_bytes.lock().unwrap();
+        let total = *self.total_bytes.lock().unwrap();
+        if total > 0 {
+            (downloaded as f64 / total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn is_remote_track(&self) -> bool {
+        *self.is_remote.lock().unwrap()
+    }
+
+    pub fn update_download_progress(&self, downloaded: u64, total: u64) {
+        *self.downloaded_bytes.lock().unwrap() = downloaded;
+        *self.total_bytes.lock().unwrap() = total;
+    }
+
+    pub fn set_remote(&self, is_remote: bool) {
+        *self.is_remote.lock().unwrap() = is_remote;
+        if !is_remote {
+            *self.downloaded_bytes.lock().unwrap() = 0;
+            *self.total_bytes.lock().unwrap() = 0;
+        }
+    }
+
     pub fn update_metadata(&self, metadata: TrackMetadata) {
         *self.current_metadata.lock().unwrap() = Some(metadata.clone());
         eprintln!("[Player] 已更新元数据: {:?}", metadata.title);
@@ -513,40 +554,51 @@ impl MusicPlayer {
         if let Ok(sink_guard) = self.sink.lock() {
             if let Some(sink) = sink_guard.as_ref() {
                 sink.stop();
-                
-                let path_buf = {
-                    let path_guard = self.current_path.lock().unwrap();
-                    path_guard.clone()
+
+                // Check for temporary file first (WebDAV downloads)
+                let temp_path = {
+                    let temp_guard = self.temp_file.lock().unwrap();
+                    temp_guard.clone()
                 };
-                
-                if let Some(path) = path_buf {
-                    let path_str = path.to_string_lossy();
-                    
-                    if path_str.starts_with("http://") || path_str.starts_with("https://") {
-                        eprintln!("[Player] Seek not supported for streaming URLs");
+
+                let play_path = if let Some(temp) = temp_path {
+                    eprintln!("[Player] Using temp file for seek: {:?}", temp);
+                    temp
+                } else {
+                    let path_guard = self.current_path.lock().unwrap();
+                    if let Some(path) = path_guard.clone() {
+                        path
+                    } else {
                         *self.current_time.lock().unwrap() = time;
                         return Ok(());
                     }
-                    
+                };
+
+                let path_str = play_path.to_string_lossy();
+                let is_remote = path_str.contains("dioxus_music_");
+
+                if is_remote {
+                    eprintln!("[Player] Seeking remote track to {} seconds", time.as_secs());
+                } else {
                     eprintln!("[Player] Seeking to {} seconds", time.as_secs());
-                    
-                    let path_clone = path.clone();
-                    let extension = path_clone.extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    
-                    let source = self.play_local_file_with_seek(&path_clone, &extension, time)?;
-                    
-                    sink.append(source);
-                    sink.play();
-                    
-                    // Set last_elapsed so that get_elapsed() returns the seek time
-                    *self.last_elapsed.lock().unwrap() = std::time::Instant::now() - time;
-                    *self.current_time.lock().unwrap() = time;
-                    
-                    return Ok(());
                 }
+
+                let path_clone = play_path.clone();
+                let extension = path_clone.extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let source = self.play_local_file_with_seek(&path_clone, &extension, time)?;
+
+                sink.append(source);
+                sink.play();
+
+                // Set last_elapsed so that get_elapsed() returns the seek time
+                *self.last_elapsed.lock().unwrap() = std::time::Instant::now() - time;
+                *self.current_time.lock().unwrap() = time;
+
+                return Ok(());
             }
         }
         Err("Failed to seek".into())

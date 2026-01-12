@@ -350,7 +350,7 @@ fn App() -> Element {
 
                 div { class: "grid grid-cols-3 gap-6",
 
-                    aside { class: "col-span-1 h-[calc(100vh-12rem)]",
+                    aside { class: "col-span-1 h-[calc(100vh-12rem)] overflow-hidden",
                         if show_webdav_browser() {
                             if let Some(config_idx) = current_webdav_config() {
                                 if config_idx < webdav_configs().len() {
@@ -1002,13 +1002,13 @@ fn PlayerControls(
     rsx! {
         div { class: "bg-gray-800 rounded-lg p-6 mb-6",
 
-            div { class: "mb-4",
+            div { class: "mb-4 relative",
                 input {
                     r#type: "range",
                     min: "0",
                     max: "100",
                     value: "{progress_percent}",
-                    class: "w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer",
+                    class: "w-full h-2 appearance-none cursor-pointer bg-gray-700 rounded-full",
                     style: "accent-color: #3b82f6;",
                     oninput: move |e| {
                         if let Some(d) = duration {
@@ -1120,9 +1120,9 @@ fn PlaylistSidebar(
 
             // WebDAV Servers Section
             if !webdav_configs.is_empty() {
-                div { class: "border-t border-gray-700 pt-4 max-h-[50%]",
+                div { class: "border-t border-gray-700 pt-4",
                     h3 { class: "text-lg font-bold mb-2", "☁️ Cloud Sources" }
-                    div { class: "space-y-2 overflow-y-auto",
+                    div { class: "max-h-96 overflow-y-auto space-y-2 webdav-file-list",
                         for (idx , config) in webdav_configs.iter().enumerate() {
                             if config.enabled {
                                 div { class: "mb-2",
@@ -2079,8 +2079,8 @@ fn WebDAVSidebar(
 ) -> Element {
     let up_path = current_path.clone();
     rsx! {
-        div { class: "bg-gray-800 rounded-lg p-4 h-full flex flex-col",
-            div { class: "flex justify-between items-center mb-4",
+        div { class: "bg-gray-800 rounded-lg p-4 h-full flex flex-col overflow-hidden",
+            div { class: "flex justify-between items-center mb-4 flex-shrink-0",
                 h3 { class: "text-lg font-bold truncate", "☁️ {config.name}" }
                 button {
                     class: "text-gray-400 hover:text-white",
@@ -2090,7 +2090,7 @@ fn WebDAVSidebar(
             }
 
             // Path breadcrumb/navigation
-            div { class: "flex gap-2 mb-2 text-sm",
+            div { class: "flex gap-2 mb-2 text-sm flex-shrink-0",
                 if current_path != "/" {
                     button {
                         class: "px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded",
@@ -2115,10 +2115,12 @@ fn WebDAVSidebar(
             }
 
             if let Some(err) = error_msg {
-                div { class: "bg-red-900 text-red-200 p-2 rounded mb-2 text-xs", "{err}" }
+                div { class: "bg-red-900 text-red-200 p-2 rounded mb-2 text-xs flex-shrink-0",
+                    "{err}"
+                }
             }
 
-            div { class: "flex-1 overflow-y-auto space-y-1",
+            div { class: "webdav-file-list flex-1 overflow-y-auto space-y-1 min-h-0",
                 if is_loading {
                     div { class: "text-center py-4 text-gray-400", "🔄 Loading..." }
                 } else if items.is_empty() {
