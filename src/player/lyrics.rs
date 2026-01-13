@@ -295,6 +295,252 @@ fn parse_time(time_str: &str) -> Option<Duration> {
     Some(Duration::from_secs(minutes * 60 + seconds) + Duration::from_millis(millis))
 }
 
+pub async fn search_kugou_lyrics(
+    title: &str,
+    artist: &str,
+) -> Result<Vec<(String, String, String)>, Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    let query = format!("{} {}", artist, title);
+
+    let response = match client
+        .get("http://mobilecdn.kugou.com/api/v3/search/song")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .query(&[
+            ("keyword", query.as_str()),
+            ("page", "1"),
+            ("pagesize", "10"),
+        ])
+        .send()
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[Lyrics-Kugou] 搜索请求失败: {}", e);
+                return Ok(Vec::new());
+            }
+        };
+
+    if !response.status().is_success() {
+        eprintln!("[Lyrics-Kugou] 搜索 HTTP 错误: {}", response.status());
+        return Ok(Vec::new());
+    }
+
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] 读取响应失败: {}", e);
+            return Ok(Vec::new());
+        }
+    };
+
+    let search_result: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] JSON 解析失败: {}", e);
+            return Ok(Vec::new());
+        }
+    };
+
+    let empty_vec: Vec<serde_json::Value> = Vec::new();
+    let songs = search_result["data"]["info"]
+        .as_array()
+        .unwrap_or(&empty_vec);
+
+    eprintln!("[Lyrics-Kugou] 找到 {} 首歌曲", songs.len());
+
+    let mut results = Vec::new();
+    for song in songs.iter().take(10) {
+        if let (Some(hash), Some(album_id), Some(songname)) = (
+            song["hash"].as_str(),
+            song["album_id"].as_str(),
+            song["songname_original"].as_str()
+        ) {
+            let singer = song["singername"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let album = song["album_name"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            results.push((hash.to_string(), album_id.to_string(), format!("{} - {}", singer, songname)));
+        }
+    }
+
+    Ok(results)
+}
+
+pub async fn download_kugou_lyric(
+    hash: &str,
+    album_id: &str,
+) -> Result<Lyric, Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    let search_response = match client
+        .get("http://krcs.kugou.com/search")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .query(&[
+            ("hash", hash),
+            ("album_id", album_id),
+            ("ver", "1"),
+            ("client", "pc"),
+            ("man", "yes"),
+        ])
+        .send()
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[Lyrics-Kugou] 搜索歌词失败: {}", e);
+                return Ok(Lyric::empty());
+            }
+        };
+
+    if !search_response.status().is_success() {
+        eprintln!("[Lyrics-Kugou] 搜索歌词 HTTP 错误: {}", search_response.status());
+        return Ok(Lyric::empty());
+    }
+
+    let text = match search_response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] 读取搜索响应失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let search_result: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] 搜索响应 JSON 解析失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let candidates: Vec<serde_json::Value> = match search_result["candidates"].as_array() {
+        Some(arr) => arr.clone(),
+        None => {
+            eprintln!("[Lyrics-Kugou] 未找到候选歌词");
+            return Ok(Lyric::empty());
+        }
+    };
+
+    if candidates.is_empty() {
+        eprintln!("[Lyrics-Kugou] 未找到候选歌词");
+        return Ok(Lyric::empty());
+    }
+
+    let first_candidate = &candidates[0];
+
+    let accesskey = match first_candidate["accesskey"].as_str() {
+        Some(s) => s.to_string(),
+        None => {
+            eprintln!("[Lyrics-Kugou] accesskey 为空");
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let download_id = match first_candidate["download_id"].as_str() {
+        Some(s) => s.to_string(),
+        None => String::from("1"),
+    };
+
+    let singer = first_candidate["singer"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let song_name = first_candidate["song"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let download_response = match client
+        .get("http://lyrics.kugou.com/download")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .query(&[
+            ("accesskey", accesskey.as_str()),
+            ("id", download_id.as_str()),
+            ("ver", "1"),
+            ("client", "pc"),
+            ("fmt", "lrc"),
+            ("charset", "utf8"),
+        ])
+        .send()
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[Lyrics-Kugou] 下载歌词失败: {}", e);
+                return Ok(Lyric::empty());
+            }
+        };
+
+    if !download_response.status().is_success() {
+        eprintln!("[Lyrics-Kugou] 下载 HTTP 错误: {}", download_response.status());
+        return Ok(Lyric::empty());
+    };
+
+    let download_text = match download_response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] 读取下载响应失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let download_result: serde_json::Value = match serde_json::from_str(&download_text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] 下载响应 JSON 解析失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let content = match download_result["content"].as_str() {
+        Some(s) => s.to_string(),
+        None => {
+            eprintln!("[Lyrics-Kugou] 歌词内容为空");
+            return Ok(Lyric::empty());
+        }
+    };
+
+    if content.is_empty() {
+        eprintln!("[Lyrics-Kugou] 歌词内容为空");
+        return Ok(Lyric::empty());
+    }
+
+    let decoded = match BASE64_STANDARD.decode(&content) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] Base64 解码失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let lrc_content = match String::from_utf8(decoded) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[Lyrics-Kugou] UTF8 解码失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    if lrc_content.is_empty() {
+        eprintln!("[Lyrics-Kugou] 解码后歌词为空");
+        return Ok(Lyric::empty());
+    }
+
+    let lrc_content = decode_html_entities(&lrc_content);
+    let lines = parse_lrc(&lrc_content);
+
+    eprintln!("[Lyrics-Kugou] 解析到 {} 行歌词", lines.len());
+
+    Ok(Lyric {
+        title: song_name,
+        artist: singer,
+        lines,
+    })
+}
+
 pub async fn search_qqmusic_lyrics(
     title: &str,
     artist: &str,
@@ -551,8 +797,117 @@ pub async fn fetch_lyrics_for_track(
         }
     }
 
+    // 4. 尝试酷狗音乐
+    match search_kugou_lyrics(title, artist_for_search).await {
+        Ok(kugou_songs) if !kugou_songs.is_empty() => {
+            eprintln!("[Lyrics] 酷狗找到 {} 首候选歌曲", kugou_songs.len());
+
+            for (hash, album_id, song_name) in kugou_songs {
+                eprintln!("[Lyrics] 尝试酷狗: {}", song_name);
+                match download_kugou_lyric(&hash, &album_id).await {
+                    Ok(lyric) if !lyric.is_empty() => {
+                        eprintln!("[Lyrics] 酷狗歌词获取成功");
+                        return Ok(lyric);
+                    }
+                    _ => {
+                        eprintln!("[Lyrics-酷狗] 版本 {} 无歌词，继续尝试...", hash);
+                    }
+                }
+            }
+            eprintln!("[Lyrics] 酷狗所有版本均无歌词");
+        }
+        Ok(_) => {
+            eprintln!("[Lyrics] 酷狗未找到歌曲");
+        }
+        Err(e) => {
+            eprintln!("[Lyrics] 酷狗搜索失败: {}", e);
+        }
+    }
+
+    // 5. 尝试 OVH API
+    eprintln!("[Lyrics] 尝试 OVH API...");
+    match download_ovh_lyric(artist_for_search, title).await {
+        Ok(lyric) if !lyric.is_empty() => {
+            eprintln!("[Lyrics] OVH 歌词获取成功");
+            return Ok(lyric);
+        }
+        _ => {
+            eprintln!("[Lyrics] OVH 未找到歌词");
+        }
+    }
+
     eprintln!("[Lyrics] 所有来源均无歌词");
     Ok(Lyric::empty())
+}
+
+pub async fn download_ovh_lyric(
+    artist: &str,
+    title: &str,
+) -> Result<Lyric, Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    let encoded_artist = urlencoding::encode(artist);
+    let encoded_title = urlencoding::encode(title);
+
+    let api_url = format!("https://api.lyrics.ovh/v1/{}/{}", encoded_artist, encoded_title);
+
+    let response = match client
+        .get(&api_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36")
+        .header("Accept", "application/json")
+        .send()
+        .await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[Lyrics-OVH] 请求失败: {}", e);
+                return Ok(Lyric::empty());
+            }
+        };
+
+    if !response.status().is_success() {
+        eprintln!("[Lyrics-OVH] HTTP 错误: {}", response.status());
+        return Ok(Lyric::empty());
+    }
+
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[Lyrics-OVH] 读取响应失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let json_result: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[Lyrics-OVH] JSON 解析失败: {}", e);
+            return Ok(Lyric::empty());
+        }
+    };
+
+    let lyrics = match json_result["lyrics"].as_str() {
+        Some(s) => s,
+        None => {
+            eprintln!("[Lyrics-OVH] 歌词字段为空");
+            return Ok(Lyric::empty());
+        }
+    };
+
+    if lyrics.is_empty() {
+        eprintln!("[Lyrics-OVH] 歌词内容为空");
+        return Ok(Lyric::empty());
+    }
+
+    let lyrics = decode_html_entities(lyrics);
+    let lines = parse_lrc(&lyrics);
+
+    eprintln!("[Lyrics-OVH] 解析到 {} 行歌词", lines.len());
+
+    Ok(Lyric {
+        title: title.to_string(),
+        artist: artist.to_string(),
+        lines,
+    })
 }
 
 pub fn load_local_lyric(file_path: &Path) -> Result<Lyric, Box<dyn std::error::Error>> {
