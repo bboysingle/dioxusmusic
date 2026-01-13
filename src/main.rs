@@ -187,25 +187,27 @@ fn App() -> Element {
     let mut webdav_items = use_signal(|| Vec::<webdav::WebDAVItem>::new());
     let mut webdav_is_loading = use_signal(|| false);
     let mut webdav_error = use_signal(|| Option::<String>::None);
-    
+    let mut current_lyric = use_signal(|| None::<player::Lyric>);
+    let mut show_lyrics = use_signal(|| false);
+
     // Auto-play trigger - atomic counter for thread-safe triggering
     let track_check_trigger: &'static Arc<std::sync::atomic::AtomicUsize> = {
         static TRIGGER: std::sync::OnceLock<Arc<std::sync::atomic::AtomicUsize>> = std::sync::OnceLock::new();
         TRIGGER.get_or_init(|| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
     };
-    
+
     // Create a static-like player reference stored in component state
     // This will be created once and persist for the lifetime of the app
     let player_ref = use_signal(|| MusicPlayer::new().ok());
-    
+
     // Auto-play: periodically check if track ended and update current time
     let global_state = get_global_state().clone();
     let player_ref_clone = player_ref.clone();
-    
+
     let _time_update_future = use_future(move || {
         let global_state = global_state.clone();
         let player_ref_clone = player_ref_clone.clone();
-        
+
         async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -219,6 +221,11 @@ fn App() -> Element {
                     // Sync duration from player
                     let duration = player.get_duration();
                     *current_duration.write() = duration;
+
+                    // Sync lyrics from player
+                    if let Some(lyric) = player.get_lyric() {
+                        *current_lyric.write() = Some(lyric);
+                    }
 
                     // Check for track end
                     let is_ended = *player.track_ended.lock().unwrap();
@@ -269,7 +276,7 @@ fn App() -> Element {
             }
         }
     });
-    
+
     // We'll access it directly in the closures since Signal is Copy
 
     let header_icon = use_signal(|| load_header_icon());
@@ -566,6 +573,10 @@ fn App() -> Element {
                             player_ref: player_ref.clone(),
                         }
 
+                        if let Some(lyric) = current_lyric() {
+                            LyricsDisplay { current_time, lyric: Some(lyric) }
+                        }
+
                         // Error message display
                         if let Some(err) = error_msg() {
                             div { class: "mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded",
@@ -584,13 +595,9 @@ fn App() -> Element {
                             volume: volume(),
                             current_time,
                             on_play: move |_| {
-                                // Read the current player value
                                 if let Some(ref player) = *player_ref.read() {
-                                    // Reset stopped by user flag
                                     player.set_stopped_by_user(false);
 
-                                    // If paused, resume from where we left off
-                                    // Otherwise, play from the beginning
                                     if player_state() == PlayerState::Paused && player.is_paused() {
                                         let _ = player.resume();
                                     } else if let Some(track_stub) = current_track() {
@@ -910,14 +917,55 @@ fn NowPlayingCard(
 
     let mut player_metadata: Signal<Option<player::TrackMetadata>> = use_signal(|| None);
 
+    // Track last fetched lyrics to avoid duplicates
+    let mut last_lyric_track_info = use_signal(|| String::new());
+
+    // Effect to fetch lyrics when metadata changes
+    let player_ref_for_lyrics = player_ref.clone();
+    use_effect(move || {
+        let metadata = player_metadata();
+        let player_option = player_ref_for_lyrics.read().clone();
+
+        if let Some(ref p) = player_option {
+            if let Some(m) = metadata.as_ref() {
+                if let Some(title) = m.title.clone() {
+                    if !title.is_empty() {
+                        let artist = m.artist.clone().unwrap_or_default();
+                        let track_info = format!("{}|{}", artist, title);
+                        if *last_lyric_track_info.read() != track_info {
+                            eprintln!("[Lyrics] 检测到新曲目: {} - {}", artist, title);
+
+                            let player_for_task = p.clone();
+                            let artist_for_search = artist.clone();
+                            spawn(async move {
+                                eprintln!("[Lyrics] 开始搜索歌词...");
+                                player_for_task.fetch_lyrics_for_current_track(&title, &artist_for_search).await;
+                                eprintln!("[Lyrics] 歌词搜索完成");
+                            });
+
+                            *last_lyric_track_info.write() = track_info;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     let _metadata_future = use_future(move || {
         let player_ref = player_ref.clone();
+        let mut last_title = String::new();
         async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                 if let Some(ref player) = *player_ref.read() {
                     if let Some(metadata) = player.get_current_metadata() {
+                        let title = metadata.title.clone().unwrap_or_default();
+                        let artist = metadata.artist.clone().unwrap_or_default();
+                        if title != last_title && !title.is_empty() {
+                            eprintln!("[Metadata] 更新: {} - {}", artist, title);
+                            last_title = title.clone();
+                        }
                         *player_metadata.write() = Some(metadata);
                     }
                 }
@@ -967,6 +1015,33 @@ fn NowPlayingCard(
             h2 { class: "text-2xl font-bold mb-2", "{display_title}" }
             p { class: "text-gray-400 mb-1", "{display_artist}" }
             p { class: "text-gray-500 text-sm", "{display_album}" }
+        }
+    }
+}
+
+#[component]
+fn LyricsDisplay(
+    current_time: Signal<Duration>,
+    lyric: Option<player::Lyric>,
+) -> Element {
+    let visible_lines = if let Some(ref lyric) = lyric {
+        let current_idx = lyric.get_current_line(*current_time.read()).unwrap_or(0);
+        let start = current_idx.saturating_sub(2);
+        let end = (current_idx + 4).min(lyric.lines.len());
+        lyric.lines[start..end].to_vec()
+    } else {
+        vec![]
+    };
+
+    rsx! {
+        if !visible_lines.is_empty() {
+            div { class: "bg-gray-800 rounded-lg p-6 mb-6 text-center",
+                div { class: "space-y-3 max-h-48 overflow-y-auto",
+                    for (idx , line) in visible_lines.iter().enumerate() {
+                        div { class: "text-sm text-gray-400 transition-colors", "{line.text}" }
+                    }
+                }
+            }
         }
     }
 }

@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod lyrics;
+pub use lyrics::{Lyric, LyricLine};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlayerState {
     Playing,
@@ -30,6 +33,7 @@ pub struct TrackMetadata {
     pub album: Option<String>,
     pub cover: Option<Vec<u8>>,
     pub duration: Duration,
+    pub lyrics: Option<String>,
 }
 
 impl TrackMetadata {
@@ -53,6 +57,11 @@ impl TrackMetadata {
             metadata.artist = tag.artist().map(|a| a.to_string());
             metadata.album = tag.album().map(|a| a.to_string());
             metadata.cover = tag.pictures().next().map(|pic| pic.data.clone());
+
+            // Read lyrics from USLT frame
+            if let Some(lyrics) = tag.lyrics().next() {
+                metadata.lyrics = Some(lyrics.text.to_string());
+            }
         }
 
         // Try FLAC tags
@@ -114,6 +123,35 @@ pub struct MusicPlayer {
     downloaded_bytes: Arc<Mutex<u64>>,
     total_bytes: Arc<Mutex<u64>>,
     is_remote: Arc<Mutex<bool>>,
+    current_lyric: Arc<Mutex<Option<Lyric>>>,
+}
+
+impl Clone for MusicPlayer {
+    fn clone(&self) -> Self {
+        MusicPlayer {
+            sink: Arc::clone(&self.sink),
+            _stream: OutputStream::try_default().unwrap_or_else(|_| panic!("Failed to create output stream")).0,
+            current_duration: Arc::clone(&self.current_duration),
+            current_time: Arc::clone(&self.current_time),
+            current_path: Arc::clone(&self.current_path),
+            on_track_end: Arc::clone(&self.on_track_end),
+            temp_file: Arc::clone(&self.temp_file),
+            playlist: Arc::clone(&self.playlist),
+            current_index: Arc::clone(&self.current_index),
+            auto_play: Arc::clone(&self.auto_play),
+            last_track_path: Arc::clone(&self.last_track_path),
+            last_track_id: Arc::clone(&self.last_track_id),
+            track_ended: Arc::clone(&self.track_ended),
+            last_elapsed: Arc::clone(&self.last_elapsed),
+            stopped_by_user: Arc::clone(&self.stopped_by_user),
+            is_playing: Arc::clone(&self.is_playing),
+            current_metadata: Arc::clone(&self.current_metadata),
+            downloaded_bytes: Arc::clone(&self.downloaded_bytes),
+            total_bytes: Arc::clone(&self.total_bytes),
+            is_remote: Arc::clone(&self.is_remote),
+            current_lyric: Arc::clone(&self.current_lyric),
+        }
+    }
 }
 
 impl MusicPlayer {
@@ -142,6 +180,7 @@ impl MusicPlayer {
             downloaded_bytes: Arc::new(Mutex::new(0)),
             total_bytes: Arc::new(Mutex::new(0)),
             is_remote: Arc::new(Mutex::new(false)),
+            current_lyric: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -655,6 +694,63 @@ impl MusicPlayer {
             }
             _ => {
                 self.play_local_file(path, extension)
+            }
+        }
+    }
+
+    pub fn get_lyric(&self) -> Option<Lyric> {
+        let guard = self.current_lyric.lock().unwrap();
+        guard.clone()
+    }
+
+    pub fn set_lyric(&self, lyric: Option<Lyric>) {
+        let mut guard = self.current_lyric.lock().unwrap();
+        *guard = lyric;
+    }
+
+    pub fn load_local_lyric(&self, music_path: &std::path::Path) {
+        if let Some(lyric_path) = lyrics::find_local_lyric(music_path) {
+            eprintln!("[Player] 找到本地歌词文件: {:?}", lyric_path);
+            match lyrics::load_local_lyric(&lyric_path) {
+                Ok(lyric) if !lyric.is_empty() => {
+                    self.set_lyric(Some(lyric));
+                    eprintln!("[Player] 本地歌词加载成功");
+                }
+                _ => {
+                    eprintln!("[Player] 本地歌词解析失败");
+                }
+            }
+        }
+    }
+
+    pub async fn fetch_lyrics_for_current_track(&self, title: &str, artist: &str) {
+        if title.is_empty() {
+            return;
+        }
+
+        eprintln!("[Player] Fetching lyrics for: {} - {}", artist, title);
+
+        let embedded_lyrics = {
+            let guard = self.current_metadata.lock().unwrap();
+            guard.as_ref().and_then(|m| m.lyrics.clone())
+        };
+
+        let music_path = {
+            let guard = self.current_path.lock().unwrap();
+            guard.clone()
+        };
+
+        match lyrics::fetch_lyrics_for_track(title, artist, embedded_lyrics.as_deref(), music_path.as_deref()).await {
+            Ok(lyric) => {
+                if !lyric.is_empty() {
+                    self.set_lyric(Some(lyric));
+                    eprintln!("[Player] Lyrics loaded successfully");
+                } else {
+                    eprintln!("[Player] No lyrics found");
+                }
+            }
+            Err(e) => {
+                eprintln!("[Player] Failed to fetch lyrics: {}", e);
             }
         }
     }
