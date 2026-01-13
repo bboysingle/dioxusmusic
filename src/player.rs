@@ -1,6 +1,6 @@
 use rodio::{Decoder, OutputStream, Sink, Source};
 use std::fs::File;
-use std::io::{BufReader, Cursor, Seek, SeekFrom, Write};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,6 +16,7 @@ pub enum PlayerState {
 }
 
 const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200MB limit for streaming
+const STREAMING_MIN_BYTES: u64 = 128 * 1024; // 128KB minimum for streaming playback
 
 #[derive(Clone)]
 pub struct Track {
@@ -116,7 +117,7 @@ pub struct MusicPlayer {
     last_track_path: Arc<Mutex<Option<String>>>,
     last_track_id: Arc<Mutex<Option<String>>>,
     pub track_ended: Arc<Mutex<bool>>,
-    last_elapsed: Arc<Mutex<std::time::Instant>>,
+    playback_start: Arc<Mutex<Option<std::time::Instant>>>,
     pub stopped_by_user: Arc<Mutex<bool>>,
     is_playing: Arc<Mutex<bool>>,
     current_metadata: Arc<Mutex<Option<TrackMetadata>>>,
@@ -124,6 +125,8 @@ pub struct MusicPlayer {
     total_bytes: Arc<Mutex<u64>>,
     is_remote: Arc<Mutex<bool>>,
     current_lyric: Arc<Mutex<Option<Lyric>>>,
+    pub download_cancelled: Arc<Mutex<bool>>,
+    playback_started: Arc<Mutex<bool>>,
 }
 
 impl Clone for MusicPlayer {
@@ -142,7 +145,7 @@ impl Clone for MusicPlayer {
             last_track_path: Arc::clone(&self.last_track_path),
             last_track_id: Arc::clone(&self.last_track_id),
             track_ended: Arc::clone(&self.track_ended),
-            last_elapsed: Arc::clone(&self.last_elapsed),
+            playback_start: Arc::clone(&self.playback_start),
             stopped_by_user: Arc::clone(&self.stopped_by_user),
             is_playing: Arc::clone(&self.is_playing),
             current_metadata: Arc::clone(&self.current_metadata),
@@ -150,6 +153,8 @@ impl Clone for MusicPlayer {
             total_bytes: Arc::clone(&self.total_bytes),
             is_remote: Arc::clone(&self.is_remote),
             current_lyric: Arc::clone(&self.current_lyric),
+            download_cancelled: Arc::clone(&self.download_cancelled),
+            playback_started: Arc::clone(&self.playback_started),
         }
     }
 }
@@ -173,7 +178,7 @@ impl MusicPlayer {
             last_track_path: Arc::new(Mutex::new(None)),
             last_track_id: Arc::new(Mutex::new(None)),
             track_ended: Arc::new(Mutex::new(false)),
-            last_elapsed: Arc::new(Mutex::new(std::time::Instant::now())),
+            playback_start: Arc::new(Mutex::new(None)),
             stopped_by_user: Arc::new(Mutex::new(false)),
             is_playing: Arc::new(Mutex::new(false)),
             current_metadata: Arc::new(Mutex::new(None)),
@@ -181,11 +186,16 @@ impl MusicPlayer {
             total_bytes: Arc::new(Mutex::new(0)),
             is_remote: Arc::new(Mutex::new(false)),
             current_lyric: Arc::new(Mutex::new(None)),
+            download_cancelled: Arc::new(Mutex::new(false)),
+            playback_started: Arc::new(Mutex::new(false)),
         })
     }
 
-    pub fn play(&self, path: &Path, track_id: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn play(&self, path: &Path, track_id: Option<String>) {
         *self.is_playing.lock().unwrap() = true;
+        *self.stopped_by_user.lock().unwrap() = false;
+        *self.download_cancelled.lock().unwrap() = false;
+        *self.playback_started.lock().unwrap() = false;
 
         if let Some(id) = track_id {
             if let Ok(mut guard) = self.last_track_id.lock() {
@@ -193,76 +203,246 @@ impl MusicPlayer {
             }
         }
 
-        let path_str = path.to_string_lossy();
-        let extension = path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let path = path.to_path_buf();
+        let path_str = path.to_string_lossy().into_owned();
+        let is_remote = path_str.starts_with("http://") || path_str.starts_with("https://");
 
-        let (source, duration) = if path_str.starts_with("http://") || path_str.starts_with("https://") {
-            let source = self.play_remote_url(&path_str)?;
-            let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
-            (Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>, duration)
-        } else {
-            let source = self.play_local_file(path, &extension)?;
-            let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
-            (source, duration)
-        };
-
-        // Set duration
-        self.set_duration(duration);
-
-        if let Ok(sink_guard) = self.sink.lock() {
-            if let Some(sink) = sink_guard.as_ref() {
-                sink.stop();
-                sink.append(source);
-                sink.play();
-            } else {
-                return Err("音频输出设备不可用".into());
-            }
-        } else {
-            return Err("无法访问音频输出设备".into());
-        }
-
-        if let Ok(mut path_guard) = self.current_path.lock() {
-            *path_guard = Some(path.to_path_buf());
-        }
-
+        let sink = self.sink.clone();
+        let current_duration = self.current_duration.clone();
+        let current_path = self.current_path.clone();
         let on_track_end = self.on_track_end.clone();
-        let last_track_id_clone = self.last_track_id.clone();
-        let track_ended_clone = self.track_ended.clone();
-        let weak_sink = Arc::downgrade(&self.sink);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                if let Some(sink_arc) = weak_sink.upgrade() {
-                    if let Ok(sink_guard) = sink_arc.lock() {
-                        if let Some(sink) = sink_guard.as_ref() {
-                            if sink.empty() {
-                                if let Ok(mut callback_guard) = on_track_end.lock() {
-                                    if let Some(callback) = callback_guard.as_mut() {
-                                        callback();
+        let track_ended = self.track_ended.clone();
+        let is_playing = self.is_playing.clone();
+        let playback_start = self.playback_start.clone();
+        let current_metadata = self.current_metadata.clone();
+        let download_cancelled = self.download_cancelled.clone();
+        let playback_started = self.playback_started.clone();
+
+        if is_remote {
+            let temp_dir = std::env::temp_dir();
+            let temp_filename = format!("dioxus_music_{}", uuid::Uuid::new_v4());
+            let temp_path = temp_dir.join(&temp_filename);
+            let url = path_str.clone();
+
+            std::thread::spawn(move || {
+                let client = match reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(120))
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[Player] 创建HTTP客户端失败: {}", e);
+                        *is_playing.lock().unwrap() = false;
+                        return;
+                    }
+                };
+
+                let response = match client.get(&url).send() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[Player] 无法下载音频文件: {}", e);
+                        *is_playing.lock().unwrap() = false;
+                        return;
+                    }
+                };
+
+                if !response.status().is_success() {
+                    eprintln!("[Player] 下载失败 (HTTP {})", response.status());
+                    *is_playing.lock().unwrap() = false;
+                    return;
+                }
+
+                let content_length = response.content_length().unwrap_or(0);
+                if content_length > MAX_FILE_SIZE {
+                    eprintln!("[Player] 文件过大");
+                    *is_playing.lock().unwrap() = false;
+                    return;
+                }
+
+                let mut file = match std::fs::File::create(&temp_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("[Player] 无法创建临时文件: {}", e);
+                        *is_playing.lock().unwrap() = false;
+                        return;
+                    }
+                };
+
+                let mut downloaded = 0;
+                let mut response = response;
+                let mut started_playing = false;
+
+                let on_track_end_clone = on_track_end.clone();
+                let track_ended_clone = track_ended.clone();
+                let current_metadata_clone = current_metadata.clone();
+
+                loop {
+                    if *download_cancelled.lock().unwrap() {
+                        eprintln!("[Player] 下载已取消");
+                        let _ = std::fs::remove_file(&temp_path);
+                        return;
+                    }
+
+                    let mut chunk = vec![0u8; 16384];
+                    match response.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            chunk.truncate(n);
+                            if let Err(e) = file.write_all(&chunk) {
+                                eprintln!("[Player] 写入文件失败: {}", e);
+                                let _ = std::fs::remove_file(&temp_path);
+                                *is_playing.lock().unwrap() = false;
+                                return;
+                            }
+                            downloaded += n;
+                        }
+                        Err(e) => {
+                            eprintln!("[Player] 下载出错: {}", e);
+                            let _ = std::fs::remove_file(&temp_path);
+                            *is_playing.lock().unwrap() = false;
+                            return;
+                        }
+                    }
+
+                    if started_playing {
+                        continue;
+                    }
+
+                    if downloaded >= STREAMING_MIN_BYTES as usize {
+                        let file_for_play = match File::open(&temp_path) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                eprintln!("[Player] 无法打开临时文件: {}", e);
+                                *is_playing.lock().unwrap() = false;
+                                return;
+                            }
+                        };
+                        let buf_reader = BufReader::new(file_for_play);
+
+                        match Decoder::new(buf_reader) {
+                            Ok(source) => {
+                                let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
+
+                                let metadata = TrackMetadata::from_path(&temp_path);
+                                eprintln!("[Player] 流式提取元数据: title={:?}, artist={:?}, duration={:?}",
+                                    metadata.title, metadata.artist, duration);
+                                *current_metadata_clone.lock().unwrap() = Some(metadata);
+
+                                if let Ok(sink_guard) = sink.lock() {
+                                    if let Some(audio_sink) = sink_guard.as_ref() {
+                                        audio_sink.stop();
+                                        audio_sink.append(source);
+                                        audio_sink.play();
+                                        started_playing = true;
+                                        *playback_started.lock().unwrap() = true;
+
+                                        *current_duration.lock().unwrap() = duration;
+                                        *current_path.lock().unwrap() = Some(temp_path.clone());
+                                        *playback_start.lock().unwrap() = Some(std::time::Instant::now());
+
+                                        let sink_for_check = sink.clone();
+                                        let on_track_end_for_check = on_track_end_clone.clone();
+                                        let track_ended_for_check = track_ended_clone.clone();
+                                        let playback_started_for_check = playback_started.clone();
+                                        std::thread::spawn(move || {
+                                            loop {
+                                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                                if let Ok(guard) = sink_for_check.lock() {
+                                                    if let Some(sink) = guard.as_ref() {
+                                                        if sink.empty() {
+                                                            if *playback_started_for_check.lock().unwrap() {
+                                                                if let Ok(mut callback_guard) = on_track_end_for_check.lock() {
+                                                                    if let Some(callback) = callback_guard.as_mut() {
+                                                                        callback();
+                                                                    }
+                                                                }
+                                                                *track_ended_for_check.lock().unwrap() = true;
+                                                            }
+                                                            break;
+                                                        }
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                        });
                                     }
                                 }
-                                // Mark track as ended
-                                *track_ended_clone.lock().unwrap() = true;
-                                break;
                             }
-                        } else {
-                            break;
+                            Err(rodio_error) => {
+                                eprintln!("[Player] 音频解码失败: {}", rodio_error);
+                                let _ = std::fs::remove_file(&temp_path);
+                                *is_playing.lock().unwrap() = false;
+                                return;
+                            }
                         }
-                    } else {
-                        break;
                     }
-                } else {
-                    break;
                 }
-            }
-        });
-        
-        eprintln!("[Player] 曲目播放结束 (自然结束)");
-        
-        Ok(())
+            });
+        } else {
+            let extension = path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            std::thread::spawn(move || {
+                let source_result = play_local_file_async(&path, &extension);
+
+                match source_result {
+                    Ok(source) => {
+                        let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
+
+                        let metadata = TrackMetadata::from_path(&path);
+                        eprintln!("[Player] 本地提取元数据: title={:?}, artist={:?}, duration={:?}",
+                            metadata.title, metadata.artist, duration);
+                        *current_metadata.lock().unwrap() = Some(metadata);
+
+                        if let Ok(sink_guard) = sink.lock() {
+                            if let Some(audio_sink) = sink_guard.as_ref() {
+                                audio_sink.stop();
+                                audio_sink.append(source);
+                                audio_sink.play();
+                                *playback_started.lock().unwrap() = true;
+
+                                *current_duration.lock().unwrap() = duration;
+                                *current_path.lock().unwrap() = Some(path);
+
+                                let sink_for_check = sink.clone();
+                                let on_track_end_for_check = on_track_end.clone();
+                                let track_ended_for_check = track_ended.clone();
+                                let playback_started_for_check = playback_started.clone();
+                                std::thread::spawn(move || {
+                                    loop {
+                                        std::thread::sleep(std::time::Duration::from_millis(100));
+                                        if let Ok(guard) = sink_for_check.lock() {
+                                            if let Some(sink) = guard.as_ref() {
+                                                if sink.empty() {
+                                                    if *playback_started_for_check.lock().unwrap() {
+                                                        if let Ok(mut callback_guard) = on_track_end_for_check.lock() {
+                                                            if let Some(callback) = callback_guard.as_mut() {
+                                                                callback();
+                                                            }
+                                                        }
+                                                        *track_ended_for_check.lock().unwrap() = true;
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[Player] 播放失败: {}", e);
+                        *is_playing.lock().unwrap() = false;
+                    }
+                }
+            });
+        }
     }
 
     fn play_local_file(&self, path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, Box<dyn std::error::Error>> {
@@ -313,22 +493,19 @@ impl MusicPlayer {
         let temp_path = temp_dir.join(&temp_filename);
 
         let (tx, rx) = std::sync::mpsc::channel();
-        let progress_sender = Arc::new(std::sync::Mutex::new(0u64));
-        let total_sender = Arc::new(std::sync::Mutex::new(0u64));
-        let player_progress = self.downloaded_bytes.clone();
+        let player_downloaded = self.downloaded_bytes.clone();
         let player_total = self.total_bytes.clone();
+        let player_playing = self.is_playing.clone();
 
-        let progress_clone = progress_sender.clone();
-        let total_clone = total_sender.clone();
-        let _ = std::thread::spawn(move || {
-            let result = std::fs::write(&temp_path, vec![]);
+        std::thread::spawn(move || {
+            let result = std::fs::File::create(&temp_path);
             if result.is_err() {
                 let _ = tx.send(Err(format!("无法创建临时文件: {:?}", result)));
                 return;
             }
 
             let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_secs(120))
                 .build();
 
             if let Err(e) = client {
@@ -352,7 +529,10 @@ impl MusicPlayer {
             }
 
             let content_length = response.content_length().unwrap_or(0);
-            *total_clone.lock().unwrap() = content_length;
+            {
+                let mut total_guard = player_total.lock().unwrap();
+                *total_guard = content_length;
+            }
 
             if content_length > MAX_FILE_SIZE {
                 let _ = tx.send(Err(format!("文件过大 ({}MB)，当前不支持播放超过 {}MB 的音频文件",
@@ -360,28 +540,44 @@ impl MusicPlayer {
                 return;
             }
 
-            let mut downloaded = 0;
-            {
-                let mut file = std::fs::File::create(&temp_path).map_err(|e| {
+            let mut file = match std::fs::File::create(&temp_path) {
+                Ok(f) => f,
+                Err(e) => {
                     let _ = tx.send(Err(format!("无法创建临时文件: {}", e)));
                     return;
-                }).unwrap();
-
-                let bytes = response.bytes().map_err(|e| {
-                    let _ = tx.send(Err(format!("读取音频数据失败: {}", e)));
-                    return;
-                }).unwrap();
-
-                let bytes_vec = bytes.to_vec();
-
-                if let Err(e) = file.write_all(&bytes_vec) {
-                    let _ = tx.send(Err(format!("写入文件失败: {}", e)));
-                    return;
                 }
-                downloaded = bytes_vec.len() as u64;
-                *progress_clone.lock().unwrap() = downloaded;
-                *player_progress.lock().unwrap() = downloaded;
-                *player_total.lock().unwrap() = content_length;
+            };
+
+            let mut downloaded = 0;
+            let mut response = response;
+
+            loop {
+                let mut chunk = vec![0u8; 16384];
+                match response.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        chunk.truncate(n);
+                        if let Err(e) = file.write_all(&chunk) {
+                            let _ = tx.send(Err(format!("写入文件失败: {}", e)));
+                            return;
+                        }
+                        downloaded += n;
+                        {
+                            let mut prog_guard = player_downloaded.lock().unwrap();
+                            *prog_guard = downloaded as u64;
+                        }
+                        {
+                            let mut play_guard = player_playing.lock().unwrap();
+                            if *play_guard && downloaded >= STREAMING_MIN_BYTES as usize {
+                                let _ = tx.send(Ok(temp_path.clone()));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("下载出错: {}", e)));
+                        return;
+                    }
+                }
             }
 
             if downloaded == 0 {
@@ -390,6 +586,7 @@ impl MusicPlayer {
             }
 
             let _ = tx.send(Ok(temp_path));
+            eprintln!("[Player] 下载完成，共 {} bytes", downloaded);
         });
 
         let temp_path = rx.recv_timeout(std::time::Duration::from_secs(120))
@@ -461,6 +658,8 @@ impl MusicPlayer {
 
     pub fn stop(&self) {
         *self.is_playing.lock().unwrap() = false;
+        *self.stopped_by_user.lock().unwrap() = true;
+        *self.download_cancelled.lock().unwrap() = true;
         if let Ok(sink_guard) = self.sink.lock() {
             if let Some(sink) = sink_guard.as_ref() {
                 sink.stop();
@@ -468,6 +667,9 @@ impl MusicPlayer {
         }
         if let Ok(mut path_guard) = self.current_path.lock() {
             *path_guard = None;
+        }
+        if let Ok(mut time_guard) = self.current_time.lock() {
+            *time_guard = Duration::from_secs(0);
         }
     }
 
@@ -529,19 +731,23 @@ impl MusicPlayer {
     pub fn get_duration(&self) -> Duration {
         *self.current_duration.lock().unwrap()
     }
-    
+
     pub fn get_elapsed(&self) -> Duration {
         let is_playing = *self.is_playing.lock().unwrap();
-        if is_playing {
-            let total = self.get_duration();
-            let now = std::time::Instant::now();
-            let last = *self.last_elapsed.lock().unwrap();
-            let diff = now.duration_since(last);
-            let elapsed = diff.min(total);
-            *self.current_time.lock().unwrap() = elapsed;
-            return elapsed;
+        if !is_playing {
+            return *self.current_time.lock().unwrap();
         }
-        *self.current_time.lock().unwrap()
+
+        if let Some(start_time) = *self.playback_start.lock().unwrap() {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(start_time);
+            let total = self.get_duration();
+            let elapsed = elapsed.min(total);
+            *self.current_time.lock().unwrap() = elapsed;
+            elapsed
+        } else {
+            *self.current_time.lock().unwrap()
+        }
     }
 
     pub fn get_current_metadata(&self) -> Option<TrackMetadata> {
@@ -579,10 +785,10 @@ impl MusicPlayer {
         *self.current_metadata.lock().unwrap() = Some(metadata.clone());
         eprintln!("[Player] 已更新元数据: {:?}", metadata.title);
     }
-    
+
     pub fn set_duration(&self, duration: Duration) {
         *self.current_duration.lock().unwrap() = duration;
-        *self.last_elapsed.lock().unwrap() = std::time::Instant::now();
+        *self.playback_start.lock().unwrap() = Some(std::time::Instant::now());
     }
     
     pub fn set_stopped_by_user(&self, stopped: bool) {
@@ -633,8 +839,7 @@ impl MusicPlayer {
                 sink.append(source);
                 sink.play();
 
-                // Set last_elapsed so that get_elapsed() returns the seek time
-                *self.last_elapsed.lock().unwrap() = std::time::Instant::now() - time;
+                *self.playback_start.lock().unwrap() = Some(std::time::Instant::now() - time);
                 *self.current_time.lock().unwrap() = time;
 
                 return Ok(());
@@ -752,6 +957,105 @@ impl MusicPlayer {
             Err(e) => {
                 eprintln!("[Player] Failed to fetch lyrics: {}", e);
             }
+        }
+    }
+}
+
+fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| format!("无法访问文件 '{}': {}", path.display(), e))?;
+
+    if !metadata.is_file() {
+        return Err(format!("'{}' 不是一个文件", path.display()));
+    }
+
+    if metadata.len() == 0 {
+        return Err(format!("文件 '{}' 为空", path.display()));
+    }
+
+    let file = File::open(path)
+        .map_err(|e| format!("无法打开文件 '{}': {}", path.display(), e))?;
+
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
+
+    if file_size > MAX_FILE_SIZE {
+        return Err(format!("文件过大 ({}MB)，当前不支持播放超过 {}MB 的音频文件",
+                          file_size / (1024 * 1024), MAX_FILE_SIZE / (1024 * 1024)));
+    }
+
+    let buf_reader = BufReader::new(file);
+
+    match Decoder::new(buf_reader) {
+        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+        Err(rodio_error) => {
+            Err(format!("音频解码失败 '{}': {}. 文件大小: {} bytes, 扩展名: {}",
+                      path.display(), rodio_error, file_size, extension))
+        }
+    }
+}
+
+fn play_remote_url_async(url: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, String> {
+    let temp_dir = std::env::temp_dir();
+    let temp_filename = format!("dioxus_music_{}", uuid::Uuid::new_v4());
+    let temp_path = temp_dir.join(&temp_filename);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let response = client.get(url).send()
+        .map_err(|e| format!("无法下载音频文件: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("下载失败 (HTTP {})", response.status()));
+    }
+
+    let content_length = response.content_length().unwrap_or(0);
+
+    if content_length > MAX_FILE_SIZE {
+        return Err(format!("文件过大 ({}MB)，当前不支持播放超过 {}MB 的音频文件",
+            content_length / (1024 * 1024), MAX_FILE_SIZE / (1024 * 1024)));
+    }
+
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| format!("无法创建临时文件: {}", e))?;
+
+    let mut downloaded = 0;
+    let mut response = response;
+
+    loop {
+        let mut chunk = vec![0u8; 16384];
+        match response.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                chunk.truncate(n);
+                file.write_all(&chunk)
+                    .map_err(|e| format!("写入文件失败: {}", e))?;
+                downloaded += n;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(format!("下载出错: {}", e));
+            }
+        }
+    }
+
+    if downloaded == 0 {
+        return Err("音频文件为空".to_string());
+    }
+
+    let file = File::open(&temp_path)
+        .map_err(|e| format!("无法打开临时文件: {}", e))?;
+
+    let buf_reader = BufReader::new(file);
+
+    match Decoder::new(buf_reader) {
+        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+        Err(rodio_error) => {
+            let _ = std::fs::remove_file(&temp_path);
+            let file_size = std::fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
+            Err(format!("音频解码失败: {}. 文件大小: {} bytes", rodio_error, file_size))
         }
     }
 }

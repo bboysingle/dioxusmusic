@@ -61,11 +61,6 @@ fn get_global_state() -> &'static GlobalPlayerState {
     GLOBAL_STATE.get_or_init(GlobalPlayerState::new)
 }
 
-const FAVICON: Asset = asset!("/assets/rmusic.ico");
-const MAIN_CSS: Asset = asset!("/assets/main.css");
-const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
-
-// Supported audio formats
 const AUDIO_FORMATS: &[&str] = &["mp3", "wav", "flac", "ogg", "m4a"];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -153,7 +148,614 @@ fn main() {
     }
 
     let cfg = Config::default()
-        .with_window(window);
+        .with_window(window)
+        .with_custom_head(String::from(r#"
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                html, body {
+                    background-color: #0f1116;
+                    color: #e5e7eb;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    height: 100%;
+                    overflow: hidden;
+                }
+                
+                /* Root container */
+                #root {
+                    height: 100%;
+                    display: flex;
+                    flex-direction: column;
+                }
+                
+                .min-h-screen { min-height: 100vh; }
+                .bg-gray-800 { background-color: #1f2937; }
+                .bg-gray-900 { background-color: #111827; }
+                .bg-gray-700 { background-color: #374151; }
+                .bg-gradient-to-b { background: linear-gradient(180deg, #1f2937 0%, #0f1116 100%); }
+                .bg-gradient-to-r { background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 100%); }
+                .text-white { color: #ffffff; }
+                .text-gray-100 { color: #f3f4f6; }
+                .text-gray-200 { color: #e5e7eb; }
+                .text-gray-300 { color: #d1d5db; }
+                .text-gray-400 { color: #9ca3af; }
+                .text-gray-500 { color: #6b7280; }
+                .text-blue-400 { color: #60a5fa; }
+                .text-green-400 { color: #4ade80; }
+                .text-red-400 { color: #f87171; }
+                .text-yellow-400 { color: #fbbf24; }
+                .p-6 { padding: 1.5rem; }
+                .p-4 { padding: 1rem; }
+                .p-3 { padding: 0.75rem; }
+                .p-2 { padding: 0.5rem; }
+                .m-4 { margin: 1rem; }
+                .mb-6 { margin-bottom: 1.5rem; }
+                .mb-4 { margin-bottom: 1rem; }
+                .mb-3 { margin-bottom: 0.75rem; }
+                .mb-2 { margin-bottom: 0.5rem; }
+                .mt-4 { margin-top: 1rem; }
+                .mt-2 { margin-top: 0.5rem; }
+                .ml-2 { margin-left: 0.5rem; }
+                .mr-2 { margin-right: 0.5rem; }
+                .flex { display: flex; }
+                .flex-col { flex-direction: column; }
+                .items-center { align-items: center; }
+                .items-start { align-items: flex-start; }
+                .justify-center { justify-content: center; }
+                .justify-between { justify-content: space-between; }
+                .justify-end { justify-content: flex-end; }
+                .gap-1 { gap: 0.25rem; }
+                .gap-2 { gap: 0.5rem; }
+                .gap-3 { gap: 0.75rem; }
+                .gap-4 { gap: 1rem; }
+                .gap-6 { gap: 1.5rem; }
+                .grid { display: grid; }
+                .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                .col-span-1 { grid-column: span 1 / span 1; }
+                .col-span-2 { grid-column: span 2 / span 2; }
+                .rounded { border-radius: 0.25rem; }
+                .rounded-full { border-radius: 9999px; }
+                .rounded-lg { border-radius: 0.5rem; }
+                .rounded-xl { border-radius: 0.75rem; }
+                .rounded-2xl { border-radius: 1rem; }
+                .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2); }
+                .shadow-md { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2); }
+                .shadow-xl { box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2); }
+                .shadow-inner { box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.2); }
+                .bg-blue-500 { background-color: #3b82f6; }
+                .bg-blue-600 { background-color: #2563eb; }
+                .bg-blue-700 { background-color: #1d4ed8; }
+                .bg-green-500 { background-color: #22c55e; }
+                .bg-green-600 { background-color: #16a34a; }
+                .bg-red-500 { background-color: #ef4444; }
+                .bg-red-600 { background-color: #dc2626; }
+                .bg-yellow-500 { background-color: #eab308; }
+                .bg-purple-500 { background-color: #a855f7; }
+                .bg-purple-600 { background-color: #9333ea; }
+                .bg-indigo-500 { background-color: #6366f1; }
+                .bg-pink-500 { background-color: #ec4899; }
+                .hover\:bg-blue-600:hover { background-color: #2563eb; }
+                .hover\:bg-blue-700:hover { background-color: #1d4ed8; }
+                .hover\:bg-green-600:hover { background-color: #16a34a; }
+                .hover\:bg-red-600:hover { background-color: #dc2626; }
+                .hover\:bg-blue-500:hover { background-color: #3b82f6; }
+                .hover\:bg-gray-600:hover { background-color: #4b5563; }
+                .hover\:bg-gray-700:hover { background-color: #374151; }
+                .hover\:bg-purple-700:hover { background-color: #7c3aed; }
+                .hover\:text-white:hover { color: #ffffff; }
+                .text-sm { font-size: 0.875rem; }
+                .text-xs { font-size: 0.75rem; }
+                .text-base { font-size: 1rem; }
+                .text-lg { font-size: 1.125rem; }
+                .text-xl { font-size: 1.25rem; }
+                .text-2xl { font-size: 1.5rem; }
+                .text-3xl { font-size: 1.875rem; }
+                .text-4xl { font-size: 2.25rem; }
+                .text-5xl { font-size: 3rem; }
+                .font-bold { font-weight: 700; }
+                .font-semibold { font-weight: 600; }
+                .font-medium { font-weight: 500; }
+                .w-full { width: 100%; }
+                .w-48 { width: 12rem; }
+                .w-40 { width: 10rem; }
+                .w-32 { width: 8rem; }
+                .w-20 { width: 5rem; }
+                .h-48 { height: 12rem; }
+                .h-12 { height: 3rem; }
+                .h-10 { height: 2.5rem; }
+                .h-8 { height: 2rem; }
+                .mx-auto { margin-left: auto; margin-right: auto; }
+                .max-w-7xl { max-width: 80rem; }
+                .max-w-4xl { max-width: 56rem; }
+                .max-w-2xl { max-width: 42rem; }
+                .max-w-md { max-width: 28rem; }
+                .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .space-y-2 > * + * { margin-top: 0.5rem; }
+                .space-y-3 > * + * { margin-top: 0.75rem; }
+                .space-y-4 > * + * { margin-top: 1rem; }
+                .overflow-y-auto { overflow-y: auto; }
+                .overflow-hidden { overflow: hidden; }
+                .max-h-96 { max-height: 24rem; }
+                .max-h-80 { max-height: 20rem; }
+                .object-cover { object-fit: cover; }
+                .fixed { position: fixed; }
+                .absolute { position: absolute; }
+                .relative { position: relative; }
+                .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+                .bg-black { background-color: #000; }
+                .bg-opacity-50 { background-color: rgba(0, 0, 0, 0.5); }
+                .bg-opacity-70 { background-color: rgba(0, 0, 0, 0.7); }
+                .flex-1 { flex: 1 1 0%; }
+                .flex-shrink-0 { flex-shrink: 0; }
+                .border { border-width: 1px; }
+                .border-2 { border-width: 2px; }
+                .border-gray-600 { border-color: #4b5563; }
+                .border-gray-500 { border-color: #6b7280; }
+                .border-gray-700 { border-color: #374151; }
+                .border-blue-500 { border-color: #3b82f6; }
+                .border-blue-600 { border-color: #2563eb; }
+                .disabled\:opacity-50 { opacity: 0.5; }
+                .cursor-pointer { cursor: pointer; }
+                .cursor-not-allowed { cursor: not-allowed; }
+                .z-50 { z-index: 50; }
+                .z-40 { z-index: 40; }
+                .select-none { user-select: none; }
+                .opacity-80 { opacity: 0.8; }
+                .transition { transition: all 0.2s ease; }
+                .transition-all { transition: all 0.3s ease; }
+                
+                /* Custom scrollbar styling */
+                ::-webkit-scrollbar { width: 8px; height: 8px; }
+                ::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+                ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+                ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+                .scrollbar { scrollbar-width: thin; scrollbar-color: #4b5563 #1f2937; }
+                
+                /* WebDAV file list scrollbar */
+                .webdav-file-list::-webkit-scrollbar { width: 6px; }
+                .webdav-file-list::-webkit-scrollbar-track { background: #374151; }
+                .webdav-file-list::-webkit-scrollbar-thumb { background: #6b7280; border-radius: 3px; }
+                .webdav-file-list::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+                .webdav-file-list { scrollbar-width: thin; scrollbar-color: #6b7280 #374151; }
+                
+                /* Modal overlay */
+                .modal-overlay {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(0, 0, 0, 0.75);
+                    display: flex: center;
+                   ;
+                    align-items justify-content: center;
+                    z-index: 1000;
+                    backdrop-filter: blur(4px);
+                }
+                
+                .modal-content {
+                    background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+                    border-radius: 1rem;
+                    padding: 2rem;
+                    max-width: 90%;
+                    max-height: 90%;
+                    overflow: auto;
+                    border: 1px solid #374151;
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                }
+                
+                .modal-header {
+                    font-size: 1.5rem;
+                    font-weight: 700;
+                    margin-bottom: 1.5rem;
+                    color: #ffffff;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.75rem;
+                }
+                
+                .modal-footer {
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 1rem;
+                    margin-top: 1.5rem;
+                    padding-top: 1rem;
+                    border-top: 1px solid #374151;
+                }
+                
+                /* Input styling - FIXED for visibility */
+                input[type="text"], 
+                input[type="password"], 
+                input[type="number"],
+                input[type="url"],
+                input[type="email"],
+                textarea {
+                    width: 100%;
+                    padding: 0.75rem 1rem;
+                    border-radius: 0.5rem;
+                    background: #1f2937;
+                    border: 2px solid #374151;
+                    color: #f3f4f6;
+                    font-size: 1rem;
+                    transition: all 0.2s ease;
+                }
+                
+                input[type="text"]::placeholder,
+                input[type="password"]::placeholder,
+                input[type="number"]::placeholder,
+                input[type="url"]::placeholder,
+                input[type="email"]::placeholder,
+                textarea::placeholder {
+                    color: #6b7280;
+                }
+                
+                input[type="text"]:focus, 
+                input[type="password"]:focus, 
+                input[type="number"]:focus,
+                input[type="url"]:focus,
+                input[type="email"]:focus,
+                textarea:focus {
+                    outline: none;
+                    border-color: #3b82f6;
+                    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+                    background: #1f2937;
+                }
+                
+                input[type="text"]:hover, 
+                input[type="password"]:hover, 
+                input[type="number"]:hover,
+                input[type="url"]:hover,
+                input[type="email"]:hover,
+                textarea:hover {
+                    border-color: #4b5563;
+                }
+                
+                /* Label styling */
+                label {
+                    display: block;
+                    font-size: 0.875rem;
+                    font-weight: 500;
+                    color: #d1d5db;
+                    margin-bottom: 0.5rem;
+                }
+                
+                /* Input group */
+                .input-group {
+                    margin-bottom: 1.25rem;
+                }
+                
+                .input-group:last-child {
+                    margin-bottom: 0;
+                }
+                
+                /* Range slider styling */
+                input[type="range"] {
+                    flex: 1;
+                    height: 8px;
+                    background: #374151;
+                    border-radius: 4px;
+                    appearance: none;
+                    cursor: pointer;
+                }
+                
+                input[type="range"]::-webkit-slider-thumb {
+                    appearance: none;
+                    width: 18px;
+                    height: 18px;
+                    background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+                    border-radius: 50%;
+                    cursor: pointer;
+                    box-shadow: 0 2px 6px rgba(59, 130, 246, 0.4);
+                    transition: transform 0.2s ease;
+                }
+                
+                input[type="range"]::-webkit-slider-thumb:hover {
+                    transform: scale(1.1);
+                }
+                
+                /* Checkbox styling */
+                input[type="checkbox"] {
+                    width: 1.125rem;
+                    height: 1.125rem;
+                    cursor: pointer;
+                    accent-color: #3b82f6;
+                }
+                
+                /* Button base styling */
+                button {
+                    cursor: pointer;
+                    border: none;
+                    transition: all 0.2s ease;
+                    font-weight: 500;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 0.5rem;
+                }
+                
+                button:disabled {
+                    cursor: not-allowed;
+                    opacity: 0.5;
+                }
+                
+                /* Button variants */
+                .btn {
+                    padding: 0.75rem 1.5rem;
+                    border-radius: 0.5rem;
+                    font-size: 1rem;
+                    font-weight: 500;
+                }
+                
+                .btn-primary {
+                    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                    color: white;
+                    box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+                }
+                
+                .btn-primary:hover:not(:disabled) {
+                    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+                    transform: translateY(-1px);
+                    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+                }
+                
+                .btn-secondary {
+                    background: #374151;
+                    color: #f3f4f6;
+                    border: 1px solid #4b5563;
+                }
+                
+                .btn-secondary:hover:not(:disabled) {
+                    background: #4b5563;
+                    border-color: #6b7280;
+                }
+                
+                .btn-success {
+                    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+                    color: white;
+                    box-shadow: 0 4px 14px rgba(34, 197, 94, 0.4);
+                }
+                
+                .btn-success:hover:not(:disabled) {
+                    background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+                    transform: translateY(-1px);
+                }
+                
+                .btn-danger {
+                    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+                    color: white;
+                    box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+                }
+                
+                .btn-danger:hover:not(:disabled) {
+                    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+                    transform: translateY(-1px);
+                }
+                
+                .btn-sm {
+                    padding: 0.5rem 1rem;
+                    font-size: 0.875rem;
+                }
+                
+                .btn-lg {
+                    padding: 1rem 2rem;
+                    font-size: 1.125rem;
+                }
+                
+                .btn-icon {
+                    padding: 0.75rem;
+                    border-radius: 50%;
+                }
+                
+                /* Progress bar */
+                .progress-bar {
+                    width: 100%;
+                    height: 6px;
+                    background: #374151;
+                    border-radius: 3px;
+                    overflow: hidden;
+                }
+                
+                .progress-bar-fill {
+                    height: 100%;
+                    background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 100%);
+                    border-radius: 3px;
+                    transition: width 0.1s ease;
+                }
+                
+                /* Card styling */
+                .card {
+                    background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+                    border-radius: 0.75rem;
+                    padding: 1.5rem;
+                    border: 1px solid #374151;
+                    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+                }
+                
+                .card-hover:hover {
+                    border-color: #4b5563;
+                    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+                }
+                
+                /* Track item styling */
+                .track-item {
+                    background: rgba(55, 65, 81, 0.5);
+                    border: 1px solid transparent;
+                    border-radius: 0.5rem;
+                    padding: 0.75rem 1rem;
+                    transition: all 0.2s ease;
+                }
+                
+                .track-item:hover {
+                    background: rgba(55, 65, 81, 0.8);
+                    border-color: #4b5563;
+                }
+                
+                .track-item.active {
+                    background: rgba(59, 130, 246, 0.2);
+                    border-color: #3b82f6;
+                }
+                
+                /* Playlist styling */
+                .playlist-item {
+                    background: rgba(55, 65, 81, 0.5);
+                    border: 2px solid transparent;
+                    border-radius: 0.5rem;
+                    padding: 0.75rem 1rem;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+                
+                .playlist-item:hover {
+                    background: rgba(55, 65, 81, 0.8);
+                }
+                
+                .playlist-item.active {
+                    background: rgba(59, 130, 246, 0.2);
+                    border-color: #3b82f6;
+                }
+                
+                /* Badge styling */
+                .badge {
+                    display: inline-flex;
+                    align-items: center;
+                    padding: 0.25rem 0.75rem;
+                    font-size: 0.75rem;
+                    font-weight: 500;
+                    border-radius: 9999px;
+                }
+                
+                .badge-blue {
+                    background: rgba(59, 130, 246, 0.2);
+                    color: #60a5fa;
+                }
+                
+                .badge-green {
+                    background: rgba(34, 197, 94, 0.2);
+                    color: #4ade80;
+                }
+                
+                .badge-red {
+                    background: rgba(239, 68, 68, 0.2);
+                    color: #f87171;
+                }
+                
+                .badge-yellow {
+                    background: rgba(234, 179, 8, 0.2);
+                    color: #fbbf24;
+                }
+                
+                /* Status indicator */
+                .status-dot {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    display: inline-block;
+                }
+                
+                .status-dot.green {
+                    background: #22c55e;
+                    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+                }
+                
+                .status-dot.yellow {
+                    background: #eab308;
+                    box-shadow: 0 0 8px rgba(234, 179, 8, 0.6);
+                }
+                
+                .status-dot.red {
+                    background: #ef4444;
+                    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+                }
+                
+                /* Animation keyframes */
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.5; }
+                }
+                
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                
+                .animate-pulse {
+                    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+                }
+                
+                .animate-spin {
+                    animation: spin 1s linear infinite;
+                }
+                
+                .animate-fade-in {
+                    animation: fadeIn 0.3s ease-out;
+                }
+                
+                /* Loading spinner */
+                .spinner {
+                    width: 24px;
+                    height: 24px;
+                    border: 3px solid #374151;
+                    border-top-color: #3b82f6;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                }
+                
+                /* Divider */
+                .divider {
+                    height: 1px;
+                    background: linear-gradient(90deg, transparent, #374151, transparent);
+                    margin: 1rem 0;
+                }
+                
+                /* Icon styling */
+                .icon {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 1.25rem;
+                    height: 1.25rem;
+                }
+                
+                /* Text utilities */
+                .text-center { text-align: center; }
+                .text-left { text-align: left; }
+                .text-right { text-align: right; }
+                
+                /* Tooltip */
+                .tooltip {
+                    position: relative;
+                }
+                
+                .tooltip::after {
+                    content: attr(data-tooltip);
+                    position: absolute;
+                    bottom: 100%;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    padding: 0.5rem 0.75rem;
+                    background: #111827;
+                    color: #f3f4f6;
+                    font-size: 0.75rem;
+                    border-radius: 0.375rem;
+                    white-space: nowrap;
+                    opacity: 0;
+                    visibility: hidden;
+                    transition: all 0.2s ease;
+                    z-index: 100;
+                }
+                
+                .tooltip:hover::after {
+                    opacity: 1;
+                    visibility: visible;
+                }
+            </style>
+        "#));
 
     dioxus_desktop::launch::launch_virtual_dom(VirtualDom::new(App), cfg);
 }
@@ -257,7 +859,7 @@ fn App() -> Element {
                                             eprintln!("[UI] 自动播放下一首: {}", next_track.title);
                                             
                                             let path = std::path::Path::new(&next_track.path);
-                                            let _ = player.play(path, Some(next_track.id.clone()));
+                                            player.play(path, Some(next_track.id.clone()));
                                             player.set_stopped_by_user(false);
                                             let vol = *volume.read();
                                             let _ = player.set_volume(vol);
@@ -282,11 +884,7 @@ fn App() -> Element {
     let header_icon = use_signal(|| load_header_icon());
 
     rsx! {
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
-        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
-
-        div { class: "min-h-screen bg-gradient-to-b from-gray-900 to-black text-white",
+        div { class: "h-screen bg-gradient-to-b from-gray-900 to-black text-white overflow-y-auto flex flex-col",
 
             header { class: "bg-gray-800 shadow-lg p-6",
                 div { class: "max-w-7xl mx-auto",
@@ -353,11 +951,11 @@ fn App() -> Element {
                 }
             }
 
-            main { class: "max-w-7xl mx-auto p-6",
+            main { class: "flex-1 max-w-7xl mx-auto p-6 overflow-y-auto",
 
                 div { class: "grid grid-cols-3 gap-6",
 
-                    aside { class: "col-span-1 h-[calc(100vh-12rem)] overflow-hidden",
+                    aside { class: "col-span-1 h-[calc(100vh-12rem)] overflow-y-auto",
                         if show_webdav_browser() {
                             if let Some(config_idx) = current_webdav_config() {
                                 if config_idx < webdav_configs().len() {
@@ -417,7 +1015,7 @@ fn App() -> Element {
                                                                 {
                                                                     let stub = TrackStub::from(track.clone());
                                                                     if let Some(ref player) = *player_ref.read() {
-                                                                        let _ = player
+                                                                        player
                                                                             .play(
                                                                                 std::path::Path::new(&track.path),
                                                                                 Some(track.id.clone()),
@@ -544,7 +1142,7 @@ fn App() -> Element {
                                                                 {
                                                                     let stub = TrackStub::from(track.clone());
                                                                     if let Some(ref player) = *player_ref.read() {
-                                                                        let _ = player
+                                                                        player
                                                                             .play(
                                                                                 std::path::Path::new(&track.path),
                                                                                 Some(track.id.clone()),
@@ -601,19 +1199,12 @@ fn App() -> Element {
                                     if player_state() == PlayerState::Paused && player.is_paused() {
                                         let _ = player.resume();
                                     } else if let Some(track_stub) = current_track() {
-                                        match player
+                                        player
                                             .play(
                                                 std::path::Path::new(&track_stub.path),
                                                 Some(track_stub.id.clone()),
-                                            )
-                                        {
-                                            Ok(_) => {
-                                                let _ = player.set_volume(volume());
-                                            }
-                                            Err(e) => {
-                                                *error_msg.write() = Some(format!("播放失败: {}", e));
-                                            }
-                                        }
+                                            );
+                                        let _ = player.set_volume(volume());
                                     }
                                 }
                                 *player_state.write() = PlayerState::Playing;
@@ -657,21 +1248,12 @@ fn App() -> Element {
                                                 let prev_track = playlist.tracks[pos - 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
                                                     player.set_stopped_by_user(false);
-                                                    match player
+                                                    player
                                                         .play(
                                                             std::path::Path::new(&prev_track.path),
                                                             Some(prev_track.id.clone()),
-                                                        )
-                                                    {
-                                                        Ok(_) => {
-                                                            let _ = player.set_volume(volume());
-                                                        }
-                                                        Err(e) => {
-                                                            *error_msg.write() = Some(
-                                                                format!("播放上一首失败: {}", e),
-                                                            );
-                                                        }
-                                                    }
+                                                        );
+                                                    let _ = player.set_volume(volume());
                                                 }
                                                 *current_track.write() = Some(prev_track);
                                                 *player_state.write() = PlayerState::Playing;
@@ -694,21 +1276,12 @@ fn App() -> Element {
                                                 let next_track = playlist.tracks[pos + 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
                                                     player.set_stopped_by_user(false);
-                                                    match player
+                                                    player
                                                         .play(
                                                             std::path::Path::new(&next_track.path),
                                                             Some(next_track.id.clone()),
-                                                        )
-                                                    {
-                                                        Ok(_) => {
-                                                            let _ = player.set_volume(volume());
-                                                        }
-                                                        Err(e) => {
-                                                            *error_msg.write() = Some(
-                                                                format!("播放下一首失败: {}", e),
-                                                            );
-                                                        }
-                                                    }
+                                                        );
+                                                    let _ = player.set_volume(volume());
                                                 }
                                                 *current_track.write() = Some(next_track);
                                                 *player_state.write() = PlayerState::Playing;
@@ -726,19 +1299,12 @@ fn App() -> Element {
                                 on_track_select: move |track_stub: TrackStub| {
                                     if let Some(ref player) = *player_ref.read() {
                                         player.set_stopped_by_user(false);
-                                        match player
+                                        player
                                             .play(
                                                 std::path::Path::new(&track_stub.path),
                                                 Some(track_stub.id.clone()),
-                                            )
-                                        {
-                                            Ok(_) => {
-                                                let _ = player.set_volume(volume());
-                                            }
-                                            Err(e) => {
-                                                *error_msg.write() = Some(format!("播放失败: {}", e));
-                                            }
-                                        }
+                                            );
+                                        let _ = player.set_volume(volume());
                                     }
                                     *current_track.write() = Some(track_stub);
                                     *player_state.write() = PlayerState::Playing;
