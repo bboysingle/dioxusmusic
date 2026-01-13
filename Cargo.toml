@@ -25,6 +25,8 @@ rfd = { version = "0.12", features = ["xdg-portal"] }
 parking_lot = "0.12"
 mp3-duration = "0.1"
 image = "0.25"
+rand = "0.8"
+sha2 = "0.10"
 
 [features]
 default = ["desktop"]

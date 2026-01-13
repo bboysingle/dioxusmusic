@@ -21,10 +21,13 @@ pub struct WebDAVItem {
 
 impl WebDAVClient {
     pub fn new(base_url: String) -> Self {
-        // 确保 base_url 末尾没有多余的 /
         let clean_url = base_url.trim_end_matches('/').to_string();
         WebDAVClient {
-            client: Arc::new(Client::new()),
+            client: Arc::new(Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new())),
             base_url: clean_url,
             username: None,
             password: None,
@@ -44,9 +47,13 @@ impl WebDAVClient {
         let mut req = self.client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), &url);
         
         if let (Some(user), Some(pass)) = (&self.username, &self.password) {
+            eprintln!("[WebDAV-Client] 使用认证: user={}, pass_len={}", user, pass.len());
             req = req.basic_auth(user.clone(), Some(pass.clone()));
+        } else {
+            eprintln!("[WebDAV-Client] 没有认证信息");
         }
 
+        eprintln!("[WebDAV-Client] 发送PROPFIND请求到: {}", url);
         let response = req.send().await?;
         
         // Parse WebDAV response (simplified - would need proper XML parsing)

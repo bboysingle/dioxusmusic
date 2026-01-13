@@ -2,6 +2,7 @@ mod player;
 mod playlist;
 mod metadata;
 mod webdav;
+mod crypto;
 
 use dioxus::prelude::*;
 use player::{MusicPlayer, PlayerState};
@@ -103,8 +104,46 @@ pub struct WebDAVConfig {
     pub name: String,
     pub url: String,
     pub username: String,
-    pub password: String,
+    pub encrypted_password: String,
     pub enabled: bool,
+    #[serde(skip)]
+    pub password: Option<String>,
+}
+
+impl WebDAVConfig {
+    pub fn get_password(&self) -> Result<String, Box<dyn std::error::Error>> {
+        // 先检查是否有旧格式的明文密码
+        if let Some(ref pwd) = self.password {
+            if !pwd.is_empty() {
+                return Ok(pwd.clone());
+            }
+        }
+        
+        if self.encrypted_password.is_empty() {
+            return Ok(String::new());
+        }
+        
+        let master_password = crypto::get_master_password()?;
+        
+        match crypto::decrypt_password(&self.encrypted_password, &master_password) {
+            Ok(p) => Ok(p),
+            Err(_) => {
+                Ok(self.encrypted_password.clone())
+            }
+        }
+    }
+
+    pub fn set_password(&mut self, password: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if password.is_empty() {
+            self.encrypted_password = String::new();
+            self.password = None;
+            return Ok(());
+        }
+        let master_password = crypto::get_master_password()?;
+        self.encrypted_password = crypto::encrypt_password(password, &master_password)?;
+        self.password = None;
+        Ok(())
+    }
 }
 
 fn main() {
@@ -1377,6 +1416,13 @@ fn App() -> Element {
                                 *current_webdav_config.write() = Some(configs.len() - 1);
                             }
                         }
+
+                        // 保存到磁盘
+                        let configs_to_save = configs.clone();
+                        drop(configs);
+                        if let Err(e) = save_webdav_configs(&configs_to_save) {
+                            eprintln!("保存WebDAV配置失败: {}", e);
+                        }
                     },
                     on_select_config: move |idx| {
                         *current_webdav_config.write() = Some(idx);
@@ -1397,8 +1443,9 @@ fn App() -> Element {
                                     name: String::new(),
                                     url: String::new(),
                                     username: String::new(),
-                                    password: String::new(),
+                                    encrypted_password: String::new(),
                                     enabled: false,
+                                    password: None,
                                 }
                             }
                         } else {
@@ -1407,8 +1454,9 @@ fn App() -> Element {
                                 name: String::new(),
                                 url: String::new(),
                                 username: String::new(),
-                                password: String::new(),
+                                encrypted_password: String::new(),
                                 enabled: false,
+                                password: None,
                             }
                         }
                     },
@@ -1416,15 +1464,20 @@ fn App() -> Element {
                         *show_webdav_config.write() = false;
                         *editing_webdav_config.write() = None;
                     },
-                    on_save_config: move |new_config| {
+                    on_save_config: move |new_config: WebDAVConfig| {
                         let editing_idx = editing_webdav_config();
+                        let mut configs = webdav_configs.write();
                         if let Some(idx) = editing_idx {
-                            if idx < webdav_configs().len() {
-                                let mut configs = webdav_configs.write();
-                                configs[idx] = new_config;
+                            if idx < configs.len() {
+                                configs[idx] = new_config.clone();
                             }
                         } else {
-                            webdav_configs.write().push(new_config);
+                            configs.push(new_config);
+                        }
+                        let configs_to_save = configs.clone();
+                        drop(configs);
+                        if let Err(e) = save_webdav_configs(&configs_to_save) {
+                            eprintln!("保存WebDAV配置失败: {}", e);
                         }
                         *show_webdav_config.write() = false;
                         *editing_webdav_config.write() = None;
@@ -2227,7 +2280,7 @@ fn WebDAVConfigModal(
     let mut name = use_signal(|| config.name.clone());
     let mut url = use_signal(|| config.url.clone());
     let mut username = use_signal(|| config.username.clone());
-    let mut password = use_signal(|| config.password.clone());
+    let mut password = use_signal(|| config.get_password().unwrap_or_default());
     let mut enabled = use_signal(|| config.enabled);
     let mut test_status = use_signal(|| Option::<Result<bool, String>>::None);
     let mut is_testing = use_signal(|| false);
@@ -2353,15 +2406,21 @@ fn WebDAVConfigModal(
                         class: "px-4 py-2 bg-green-600 hover:bg-green-700 rounded disabled:opacity-50",
                         disabled: name().is_empty() || url().is_empty(),
                         onclick: move |_| {
-                            on_save_config
-                                .call(WebDAVConfig {
-                                    id: config.id.clone(),
-                                    name: name(),
-                                    url: url(),
-                                    username: username(),
-                                    password: password(),
-                                    enabled: enabled(),
-                                });
+                            let pwd = password();
+
+                            let mut new_config = WebDAVConfig {
+                                id: config.id.clone(),
+                                name: name(),
+                                url: url(),
+                                username: username(),
+                                encrypted_password: String::new(),
+                                enabled: enabled(),
+                                password: None,
+                            };
+                            if let Err(e) = new_config.set_password(&pwd) {
+                                eprintln!("加密密码失败: {}", e);
+                            }
+                            on_save_config.call(new_config);
                         },
                         "✓ Add Server"
                     }
@@ -2426,8 +2485,10 @@ async fn test_webdav_connection(url: &str, username: &str, password: &str) -> Re
             } else if status.as_u16() == 405 {
                 // 405 Method Not Allowed - PROPFIND not allowed, but server exists
                 Ok(true)
+            } else if status.as_u16() == 429 {
+                Err("请求过于频繁，请稍后再试 (HTTP 429)".to_string())
             } else if status.as_u16() == 404 {
-                Err(format!("服务器连接成功，但路径不存在 (HTTP 404)"))
+                Err("服务器连接成功，但路径不存在 (HTTP 404)".to_string())
             } else {
                 Err(format!("服务器返回错误 (HTTP {})", status.as_u16()))
             }
@@ -2444,6 +2505,26 @@ async fn test_webdav_connection(url: &str, username: &str, password: &str) -> Re
     }
 }
 
+#[derive(Deserialize)]
+struct OldWebDAVConfig {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+struct ConfigForSave<'a> {
+    id: &'a str,
+    name: &'a str,
+    url: &'a str,
+    username: &'a str,
+    encrypted_password: &'a str,
+    enabled: bool,
+}
+
 // Load WebDAV configs from disk
 fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>> {
     let config_dir = get_config_dir()?;
@@ -2451,7 +2532,61 @@ fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>
     
     if config_file.exists() {
         let content = std::fs::read_to_string(&config_file)?;
-        let configs: Vec<WebDAVConfig> = serde_json::from_str(&content)?;
+        
+        // 尝试解析新格式
+        let mut configs: Result<Vec<WebDAVConfig>, _> = serde_json::from_str(&content);
+        
+        // 如果新格式解析失败，尝试旧格式
+        if configs.is_err() {
+            let old_configs: Vec<OldWebDAVConfig> = serde_json::from_str(&content)?;
+            let mut new_configs = Vec::new();
+            
+            for old in old_configs {
+                let password_str = old.password.clone();
+                let mut config = WebDAVConfig {
+                    id: old.id,
+                    name: old.name,
+                    url: old.url,
+                    username: old.username,
+                    encrypted_password: String::new(),
+                    enabled: old.enabled,
+                    password: None,
+                };
+                let _ = config.set_password(&password_str);
+                new_configs.push(config);
+            }
+            
+            // 保存为新格式
+            save_webdav_configs(&new_configs)?;
+            return Ok(new_configs);
+        }
+        
+        let mut configs = configs?;
+        
+        // 检查并迁移旧格式密码
+        let mut needs_save = false;
+        let mut passwords_to_migrate: Vec<(usize, String)> = Vec::new();
+        
+        for (i, config) in configs.iter().enumerate() {
+            if let Some(ref pwd) = config.password {
+                if !pwd.is_empty() {
+                    needs_save = true;
+                    passwords_to_migrate.push((i, pwd.clone()));
+                }
+            }
+        }
+        
+        for (i, pwd) in passwords_to_migrate {
+            if let Err(e) = configs[i].set_password(&pwd) {
+                eprintln!("迁移密码失败: {}", e);
+            }
+            configs[i].password = None;
+        }
+        
+        if needs_save {
+            save_webdav_configs(&configs)?;
+        }
+        
         Ok(configs)
     } else {
         Ok(Vec::new())
@@ -2687,8 +2822,24 @@ fn WebDAVBrowserModal(
 async fn load_webdav_folder(config: &WebDAVConfig, path: &str) -> Result<Vec<webdav::WebDAVItem>, Box<dyn std::error::Error>> {
     use webdav::WebDAVClient;
     
+    let password = match config.get_password() {
+        Ok(p) => {
+            if p.len() == config.encrypted_password.len() {
+                eprintln!("[WebDAV] 解密可能失败: 返回长度与密文相同");
+            }
+            eprintln!("[WebDAV] 解密结果: username={}, password_len={}", config.username, p.len());
+            p
+        }
+        Err(e) => {
+            eprintln!("[WebDAV] 解密失败: {}", e);
+            String::new()
+        }
+    };
+    
+    eprintln!("[WebDAV] 准备请求: url={}{}, user={}", config.url, path, config.username);
+    
     let client = WebDAVClient::new(config.url.clone())
-        .with_auth(config.username.clone(), config.password.clone());
+        .with_auth(config.username.clone(), password);
     
     let items = client.list_items(path).await?;
     
@@ -2828,12 +2979,14 @@ async fn create_webdav_placeholder_tracks(
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
     let mut tracks = Vec::new();
     
+    let password = config.get_password()?;
+    
     let mut base_url = reqwest::Url::parse(&config.url)?;
     
     if !config.username.is_empty() {
         base_url.set_username(&config.username).map_err(|_| "Invalid username")?;
-        if !config.password.is_empty() {
-            base_url.set_password(Some(&config.password)).map_err(|_| "Invalid password")?;
+        if !password.is_empty() {
+            base_url.set_password(Some(&password)).map_err(|_| "Invalid password")?;
         }
     }
     
@@ -2841,22 +2994,17 @@ async fn create_webdav_placeholder_tracks(
         let full_url = if path_str.starts_with("http") {
             path_str.to_string()
         } else {
-            // 构建包含认证信息的完整 URL
-            // config.url = http://192.168.2.5:5244/dav/tianyi
-            // 完整 URL = http://username:password@192.168.2.5:5244/dav/tianyi/音乐/xxx.flac
             let base = config.url.trim_end_matches('/');
 
-            // 找到协议后的位置
             let proto_end = base.find("://").map(|p| p + 3).unwrap_or(0);
 
-            // 找到路径开始位置
             let path_start = base[proto_end..].find('/').map(|p| proto_end + p).unwrap_or(base.len());
 
             let host_port = &base[proto_end..path_start];
             let base_path = &base[path_start..];
 
             let auth_part = if !config.username.is_empty() {
-                format!("{}:{}@", config.username, config.password)
+                format!("{}:{}@", config.username, password)
             } else {
                 String::new()
             };
@@ -2899,13 +3047,15 @@ async fn download_and_import_webdav_files(
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
     let mut tracks = Vec::new();
     
+    let password = config.get_password()?;
+    
     let client = reqwest::Client::new();
     let mut base_url = reqwest::Url::parse(&config.url)?;
     
     if !config.username.is_empty() {
         base_url.set_username(&config.username).map_err(|_| "Invalid username")?;
-        if !config.password.is_empty() {
-            base_url.set_password(Some(&config.password)).map_err(|_| "Invalid password")?;
+        if !password.is_empty() {
+            base_url.set_password(Some(&password)).map_err(|_| "Invalid password")?;
         }
     }
     
@@ -2932,16 +3082,14 @@ async fn download_and_import_webdav_files(
            .unwrap_or(&decoded_filename)
            .to_string();
         
-        // Try to get duration from metadata
         let mut duration = std::time::Duration::from_secs(0);
         
-        // Download file to temp location to read metadata
         let temp_dir = std::env::temp_dir();
         let temp_filename = format!("dioxusmusic_{}", uuid::Uuid::new_v4());
         let temp_path = temp_dir.join(&temp_filename);
         
         match client.get(&full_url)
-            .basic_auth(&config.username, Some(&config.password))
+            .basic_auth(&config.username, Some(&password))
             .send().await {
             Ok(response) => {
                 if response.status().is_success() {
@@ -2985,12 +3133,16 @@ async fn fetch_webdav_track_metadata(
 ) -> Result<std::time::Duration, Box<dyn std::error::Error>> {
     let mut duration = std::time::Duration::from_secs(0);
     
+    let password = config.get_password()?;
+    
     let client = reqwest::Client::new();
     let mut base_url = reqwest::Url::parse(&config.url)?;
     
     if !config.username.is_empty() {
         base_url.set_username(&config.username).ok();
-        base_url.set_password(Some(&config.password)).ok();
+        if !password.is_empty() {
+            base_url.set_password(Some(&password)).ok();
+        }
     }
     
     let full_url = if path.starts_with("http") {
@@ -3001,8 +3153,6 @@ async fn fetch_webdav_track_metadata(
         }
         u.to_string()
     } else {
-        // path 是相对于 base_url 的路径
-        // base_url 已经包含配置中的子目录路径
         base_url.join(path)?.to_string()
     };
     
@@ -3011,7 +3161,7 @@ async fn fetch_webdav_track_metadata(
     let temp_path = temp_dir.join(&temp_filename);
     
     match client.get(&full_url)
-        .basic_auth(&config.username, Some(&config.password))
+        .basic_auth(&config.username, Some(&password))
         .send().await {
         Ok(response) => {
             if response.status().is_success() {
