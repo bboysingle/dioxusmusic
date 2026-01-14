@@ -1656,21 +1656,27 @@ fn LyricsDisplay(
     current_time: Signal<Duration>,
     lyric: Option<player::Lyric>,
 ) -> Element {
-    let visible_lines = if let Some(ref lyric) = lyric {
+    let (visible_lines, current_line_idx) = if let Some(ref lyric) = lyric {
         let current_idx = lyric.get_current_line(*current_time.read()).unwrap_or(0);
         let start = current_idx.saturating_sub(2);
         let end = (current_idx + 4).min(lyric.lines.len());
-        lyric.lines[start..end].to_vec()
+        let lines = lyric.lines[start..end].to_vec();
+        let relative_current_idx = current_idx.saturating_sub(start);
+        (lines, Some(relative_current_idx))
     } else {
-        vec![]
+        (vec![], None)
     };
 
     rsx! {
         if !visible_lines.is_empty() {
             div { class: "bg-gray-800 rounded-lg p-6 mb-6 text-center",
                 div { class: "space-y-3 max-h-48 overflow-y-auto",
-                    for (idx , line) in visible_lines.iter().enumerate() {
-                        div { class: "text-sm text-gray-400 transition-colors", "{line.text}" }
+                    for (idx, line) in visible_lines.iter().enumerate() {
+                        if Some(idx) == current_line_idx {
+                            div { class: "text-xl font-bold text-white transition-colors scale-105", "{line.text}" }
+                        } else {
+                            div { class: "text-sm text-gray-400 transition-colors", "{line.text}" }
+                        }
                     }
                 }
             }
