@@ -3,14 +3,38 @@ use rand::rngs::OsRng;
 use sha2::{Sha256, Digest};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::error::Error;
+use std::path::PathBuf;
 
 const KEY_LEN: usize = 32;
 
-fn get_encryption_key() -> Result<[u8; KEY_LEN], Box<dyn Error>> {
-    let home = std::env::var("HOME")?;
-    let key_file = format!("{}/.dioxus_music/encryption.key", home);
+fn get_config_dir() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let path = PathBuf::from(appdata).join("dioxus_music");
+        std::fs::create_dir_all(&path)?;
+        eprintln!("[Crypto] 使用 Windows APPDATA 目录: {}", path.display());
+        return Ok(path);
+    }
 
-    let key: [u8; KEY_LEN] = if std::path::Path::new(&key_file).exists() {
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = PathBuf::from(home).join(".dioxus_music");
+        std::fs::create_dir_all(&path)?;
+        eprintln!("[Crypto] 使用 HOME 目录: {}", path.display());
+        return Ok(path);
+    }
+
+    let path = PathBuf::from(".");
+    std::fs::create_dir_all(&path)?;
+    eprintln!("[Crypto] 使用当前目录作为配置目录: {}", path.display());
+    Ok(path)
+}
+
+fn get_encryption_key() -> Result<[u8; KEY_LEN], Box<dyn Error>> {
+    let config_dir = get_config_dir()?;
+    let key_file = config_dir.join("encryption.key");
+
+    eprintln!("[Crypto] 加密密钥文件路径: {}", key_file.display());
+
+    let key: [u8; KEY_LEN] = if key_file.exists() {
         let key_data = std::fs::read(&key_file)?;
         if key_data.len() != KEY_LEN {
             return Err("Invalid encryption key file".into());
@@ -19,7 +43,7 @@ fn get_encryption_key() -> Result<[u8; KEY_LEN], Box<dyn Error>> {
     } else {
         let mut key = [0u8; KEY_LEN];
         OsRng.fill_bytes(&mut key);
-        std::fs::create_dir_all(format!("{}/.dioxus_music", home))?;
+        std::fs::create_dir_all(&config_dir)?;
         std::fs::write(&key_file, &key)?;
         key
     };
@@ -161,13 +185,16 @@ pub fn generate_master_password() -> String {
 }
 
 pub fn get_master_password() -> Result<String, Box<dyn Error>> {
-    let home = std::env::var("HOME")?;
-    let master_file = format!("{}/.dioxus_music/.master", home);
-    let config_dir = format!("{}/.dioxus_music", home);
+    let config_dir = get_config_dir()?;
+    let master_file = config_dir.join(".master");
 
-    if std::path::Path::new(&master_file).exists() {
+    eprintln!("[Crypto] 主密码文件路径: {}", master_file.display());
+
+    if master_file.exists() {
+        eprintln!("[Crypto] 主密码文件存在，尝试读取");
         Ok(std::fs::read_to_string(&master_file)?)
     } else {
+        eprintln!("[Crypto] 主密码文件不存在，创建新的");
         std::fs::create_dir_all(&config_dir)?;
         let password = generate_master_password();
         std::fs::write(&master_file, &password)?;

@@ -16,7 +16,7 @@ pub enum PlayerState {
 }
 
 const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200MB limit for streaming
-const STREAMING_MIN_BYTES: u64 = 128 * 1024; // 128KB minimum for streaming playback
+const STREAMING_MIN_BYTES: u64 = 512 * 1024; // 512KB minimum for streaming playback (increased from 128KB)
 
 #[derive(Clone)]
 pub struct Track {
@@ -370,10 +370,16 @@ impl MusicPlayer {
                                 }
                             }
                             Err(rodio_error) => {
-                                eprintln!("[Player] 音频解码失败: {}", rodio_error);
-                                let _ = std::fs::remove_file(&temp_path);
-                                *is_playing.lock().unwrap() = false;
-                                return;
+                                eprintln!("[Player] 音频解码失败: {} (已下载: {} bytes)", rodio_error, downloaded);
+                                if downloaded < STREAMING_MIN_BYTES as usize * 2 {
+                                    eprintln!("[Player] 数据不足，等待更多数据...");
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                } else {
+                                    eprintln!("[Player] 数据已足够但解码失败，可能是文件格式问题");
+                                    let _ = std::fs::remove_file(&temp_path);
+                                    *is_playing.lock().unwrap() = false;
+                                    return;
+                                }
                             }
                         }
                     }

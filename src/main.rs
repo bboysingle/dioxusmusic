@@ -118,17 +118,19 @@ impl WebDAVConfig {
                 return Ok(pwd.clone());
             }
         }
-        
+
         if self.encrypted_password.is_empty() {
             return Ok(String::new());
         }
-        
+
         let master_password = crypto::get_master_password()?;
-        
+
         match crypto::decrypt_password(&self.encrypted_password, &master_password) {
             Ok(p) => Ok(p),
             Err(_) => {
-                Ok(self.encrypted_password.clone())
+                // 解密失败，可能是跨平台迁移
+                eprintln!("[WebDAV] 解密失败，密码可能是在其他平台加密的");
+                Err("Password decryption failed. The password may have been encrypted on a different platform. Please re-enter the password.".into())
             }
         }
     }
@@ -2528,8 +2530,10 @@ struct ConfigForSave<'a> {
 // Load WebDAV configs from disk
 fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>> {
     let config_dir = get_config_dir()?;
-    let config_file = std::path::PathBuf::from(&config_dir).join("webdav_configs.json");
-    
+    let config_file = config_dir.join("webdav_configs.json");
+
+    eprintln!("[Config] 配置文件路径: {}", config_file.display());
+
     if config_file.exists() {
         let content = std::fs::read_to_string(&config_file)?;
         
@@ -2596,19 +2600,40 @@ fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>
 // Save WebDAV configs to disk
 fn save_webdav_configs(configs: &[WebDAVConfig]) -> Result<(), Box<dyn std::error::Error>> {
     let config_dir = get_config_dir()?;
-    std::fs::create_dir_all(&config_dir)?;
-    
-    let config_file = std::path::PathBuf::from(&config_dir).join("webdav_configs.json");
+
+    let config_file = config_dir.join("webdav_configs.json");
+    eprintln!("[Config] 保存配置文件到: {}", config_file.display());
+
     let json = serde_json::to_string_pretty(configs)?;
     std::fs::write(config_file, json)?;
-    
+
     Ok(())
 }
 
 // Get config directory
-fn get_config_dir() -> Result<String, Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME")?;
-    Ok(format!("{}/.dioxus_music", home))
+fn get_config_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    // Cross-platform config directory
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        // Windows: %APPDATA%
+        let path = std::path::PathBuf::from(appdata).join("dioxus_music");
+        std::fs::create_dir_all(&path)?;
+        eprintln!("[Config] 使用 Windows APPDATA 目录: {}", path.display());
+        return Ok(path);
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        // macOS/Linux: ~/.dioxus_music
+        let path = std::path::PathBuf::from(home).join(".dioxus_music");
+        std::fs::create_dir_all(&path)?;
+        eprintln!("[Config] 使用 HOME 目录: {}", path.display());
+        return Ok(path);
+    }
+
+    // Fallback: use current directory
+    let path = std::path::PathBuf::from(".");
+    std::fs::create_dir_all(&path)?;
+    eprintln!("[Config] 使用当前目录作为配置目录: {}", path.display());
+    Ok(path)
 }
 
 #[component]
@@ -2994,24 +3019,26 @@ async fn create_webdav_placeholder_tracks(
         let full_url = if path_str.starts_with("http") {
             path_str.to_string()
         } else {
-            let base = config.url.trim_end_matches('/');
+            // 使用 reqwest::Url 正确构建 URL
+            let mut url = base_url.clone();
 
-            let proto_end = base.find("://").map(|p| p + 3).unwrap_or(0);
+            // 清理 path_str：移除开头的多余 / 和 , 符号
+            let clean_path = path_str.trim_start_matches('/').trim_end_matches(',');
 
-            let path_start = base[proto_end..].find('/').map(|p| proto_end + p).unwrap_or(base.len());
+            // 将路径片段添加到 URL
+            for segment in clean_path.split('/') {
+                if !segment.is_empty() {
+                    url = url.join(&format!("{}/", segment)).map_err(|_| "Invalid path segment")?;
+                }
+            }
 
-            let host_port = &base[proto_end..path_start];
-            let base_path = &base[path_start..];
+            // 移除末尾的 /
+            let mut url_str = url.to_string();
+            if url_str.ends_with('/') && !clean_path.is_empty() {
+                url_str.pop();
+            }
 
-            let auth_part = if !config.username.is_empty() {
-                format!("{}:{}@", config.username, password)
-            } else {
-                String::new()
-            };
-
-            format!("{}{}{}{}{}{}", &base[..proto_end], auth_part, host_port, base_path,
-                if path_str.starts_with('/') { "" } else { "/" },
-                path_str)
+            url_str
         };
 
         let filename = path_str.split('/').last().unwrap_or("Unknown");
