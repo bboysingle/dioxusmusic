@@ -9,10 +9,15 @@ use player::{MusicPlayer, PlayerState};
 use playlist::Playlist;
 use metadata::TrackMetadata;
 use std::time::Duration;
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 use uuid::Uuid;
 use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
+
+static WEBDAV_COVER_CACHE: Lazy<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn load_header_icon() -> Option<String> {
     std::fs::read("assets/rmusic.ico")
@@ -83,6 +88,7 @@ pub struct TrackStub {
     pub artist: String,
     pub album: String,
     pub duration: Duration,
+    pub cover: Option<Vec<u8>>,
 }
 
 impl From<Track> for TrackStub {
@@ -94,6 +100,7 @@ impl From<Track> for TrackStub {
             artist: track.artist,
             album: track.album,
             duration: track.duration,
+            cover: track.cover,
         }
     }
 }
@@ -112,13 +119,14 @@ pub struct WebDAVConfig {
 
 impl WebDAVConfig {
     pub fn get_password(&self) -> Result<String, Box<dyn std::error::Error>> {
-        // 先检查是否有旧格式的明文密码
+        // 优先使用内存中已缓存的明文密码
         if let Some(ref pwd) = self.password {
             if !pwd.is_empty() {
                 return Ok(pwd.clone());
             }
         }
 
+        // 如果没有缓存密码，尝试解密
         if self.encrypted_password.is_empty() {
             return Ok(String::new());
         }
@@ -128,9 +136,7 @@ impl WebDAVConfig {
         match crypto::decrypt_password(&self.encrypted_password, &master_password) {
             Ok(p) => Ok(p),
             Err(_) => {
-                // 解密失败，可能是跨平台迁移
-                eprintln!("[WebDAV] 解密失败，密码可能是在其他平台加密的");
-                Err("Password decryption failed. The password may have been encrypted on a different platform. Please re-enter the password.".into())
+                Err("Password decryption failed. Please re-enter the password.".into())
             }
         }
     }
@@ -143,7 +149,7 @@ impl WebDAVConfig {
         }
         let master_password = crypto::get_master_password()?;
         self.encrypted_password = crypto::encrypt_password(password, &master_password)?;
-        self.password = None;
+        self.password = Some(password.to_string());
         Ok(())
     }
 }
@@ -1537,7 +1543,7 @@ fn NowPlayingCard(
             artist: stub.artist.clone(),
             album: stub.album.clone(),
             duration: stub.duration,
-            cover: None,
+            cover: stub.cover.clone(),
         }
     });
 
@@ -2071,6 +2077,38 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
+// Find cover image in directory (case-insensitive)
+fn find_cover_image_in_dir(dir: &Path) -> Option<Vec<u8>> {
+    const COVER_FILENAMES: [&str; 6] = ["cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.jpeg", "folder.png"];
+
+    for filename in COVER_FILENAMES.iter() {
+        let cover_path = dir.join(filename);
+        if cover_path.exists() {
+            if let Ok(data) = std::fs::read(&cover_path) {
+                // Verify it's a valid image
+                if is_valid_image(&data) {
+                    eprintln!("[Cover] Found cover image: {}", cover_path.display());
+                    return Some(data);
+                }
+            }
+        }
+    }
+    None
+}
+
+// Check if data is a valid image
+fn is_valid_image(data: &[u8]) -> bool {
+    // JPEG: FF D8 FF
+    if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+        return true;
+    }
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if data.len() >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 {
+        return true;
+    }
+    false
+}
+
 // Scan directory for music files
 pub fn scan_music_directory(path: &str) -> Result<Vec<TrackStub>, Box<dyn std::error::Error>> {
     let mut tracks = Vec::new();
@@ -2085,14 +2123,26 @@ pub fn scan_music_directory(path: &str) -> Result<Vec<TrackStub>, Box<dyn std::e
             let ext_lower = ext.to_lowercase();
             if AUDIO_FORMATS.contains(&ext_lower.as_str()) {
                 let track_stub = match crate::metadata::TrackMetadata::from_file(path) {
-                    Ok(track) => TrackStub::from(track),
-                    Err(_) => TrackStub {
-                        id: Uuid::new_v4().to_string(),
-                        path: path.to_string_lossy().to_string(),
-                        title: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Unknown".to_string()),
-                        artist: "Unknown Artist".to_string(),
-                        album: "Unknown Album".to_string(),
-                        duration: Duration::from_secs(0),
+                    Ok(mut track) => {
+                        // If no cover from metadata, try to find in directory
+                        if track.cover.is_none() {
+                            if let Some(dir_cover) = path.parent().and_then(find_cover_image_in_dir) {
+                                track.cover = Some(dir_cover);
+                            }
+                        }
+                        TrackStub::from(track)
+                    },
+                    Err(_) => {
+                        let cover = path.parent().and_then(find_cover_image_in_dir);
+                        TrackStub {
+                            id: Uuid::new_v4().to_string(),
+                            path: path.to_string_lossy().to_string(),
+                            title: path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Unknown".to_string()),
+                            artist: "Unknown Artist".to_string(),
+                            album: "Unknown Album".to_string(),
+                            duration: Duration::from_secs(0),
+                            cover,
+                        }
                     },
                 };
                 tracks.push(track_stub);
@@ -2545,15 +2595,15 @@ fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>
 
     if config_file.exists() {
         let content = std::fs::read_to_string(&config_file)?;
-        
+
         // 尝试解析新格式
         let mut configs: Result<Vec<WebDAVConfig>, _> = serde_json::from_str(&content);
-        
+
         // 如果新格式解析失败，尝试旧格式
         if configs.is_err() {
             let old_configs: Vec<OldWebDAVConfig> = serde_json::from_str(&content)?;
             let mut new_configs = Vec::new();
-            
+
             for old in old_configs {
                 let password_str = old.password.clone();
                 let mut config = WebDAVConfig {
@@ -2568,38 +2618,29 @@ fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>
                 let _ = config.set_password(&password_str);
                 new_configs.push(config);
             }
-            
+
             // 保存为新格式
             save_webdav_configs(&new_configs)?;
             return Ok(new_configs);
         }
-        
+
         let mut configs = configs?;
-        
-        // 检查并迁移旧格式密码
-        let mut needs_save = false;
-        let mut passwords_to_migrate: Vec<(usize, String)> = Vec::new();
-        
-        for (i, config) in configs.iter().enumerate() {
-            if let Some(ref pwd) = config.password {
-                if !pwd.is_empty() {
-                    needs_save = true;
-                    passwords_to_migrate.push((i, pwd.clone()));
+
+        // 迁移旧格式密码：解密并缓存到内存
+        for config in configs.iter_mut() {
+            if !config.encrypted_password.is_empty() && config.password.is_none() {
+                match config.get_password() {
+                    Ok(pwd) => {
+                        config.password = Some(pwd.clone());
+                        eprintln!("[Config] 已缓存 {} 的密码到内存", config.name);
+                    }
+                    Err(e) => {
+                        eprintln!("[Config] 解密 {} 密码失败: {}", config.name, e);
+                    }
                 }
             }
         }
-        
-        for (i, pwd) in passwords_to_migrate {
-            if let Err(e) = configs[i].set_password(&pwd) {
-                eprintln!("迁移密码失败: {}", e);
-            }
-            configs[i].password = None;
-        }
-        
-        if needs_save {
-            save_webdav_configs(&configs)?;
-        }
-        
+
         Ok(configs)
     } else {
         Ok(Vec::new())
@@ -3006,6 +3047,56 @@ fn WebDAVSidebar(
     }
 }
 
+// Find cover image in WebDAV directory (with caching)
+async fn find_cover_image_in_webdav(config: &WebDAVConfig, dir_path: &str) -> Option<Vec<u8>> {
+    const COVER_FILENAMES: [&str; 6] = ["cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.jpeg", "folder.png"];
+
+    // Check cache first
+    let cache_key = dir_path.to_string();
+    if let Some(cached) = WEBDAV_COVER_CACHE.lock().unwrap().get(&cache_key) {
+        return Some(cached.clone());
+    }
+
+    for filename in COVER_FILENAMES.iter() {
+        let cover_path = if dir_path.ends_with('/') {
+            format!("{}{}", dir_path, filename)
+        } else {
+            format!("{}/{}", dir_path, filename)
+        };
+
+        match download_webdav_file(config, &cover_path).await {
+            Ok(data) if is_valid_image(&data) => {
+                eprintln!("[Cover] Found and cached WebDAV cover: {}", cover_path);
+                // Cache the cover
+                WEBDAV_COVER_CACHE.lock().unwrap().insert(cache_key, data.clone());
+                return Some(data);
+            }
+            _ => continue,
+        }
+    }
+    None
+}
+
+// Download file from WebDAV
+async fn download_webdav_file(config: &WebDAVConfig, file_path: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+
+    let mut url = reqwest::Url::parse(file_path)?;
+    if !config.username.is_empty() {
+        url.set_username(&config.username).ok();
+        if let Some(pwd) = config.get_password().ok().filter(|p| !p.is_empty()) {
+            url.set_password(Some(&pwd)).ok();
+        }
+    }
+
+    let response = client.get(url).send().await?;
+    if response.status().is_success() {
+        Ok(response.bytes().await?.to_vec())
+    } else {
+        Err("Failed to download file".into())
+    }
+}
+
 // Create placeholder Track for WebDAV files without downloading (for adding to playlist)
 async fn create_webdav_placeholder_tracks(
     config: &WebDAVConfig,
@@ -3014,16 +3105,34 @@ async fn create_webdav_placeholder_tracks(
     let mut tracks = Vec::new();
     
     let password = config.get_password()?;
-    
+
     let mut base_url = reqwest::Url::parse(&config.url)?;
-    
+
     if !config.username.is_empty() {
         base_url.set_username(&config.username).map_err(|_| "Invalid username")?;
         if !password.is_empty() {
             base_url.set_password(Some(&password)).map_err(|_| "Invalid password")?;
         }
     }
-    
+
+    // Get directory path for cover search
+    let dir_path = if file_paths.is_empty() {
+        config.url.clone()
+    } else {
+        let first_path = file_paths[0].trim_start_matches('/').trim_end_matches(',');
+        if let Some(pos) = first_path.rfind('/') {
+            let base = base_url.to_string();
+            let proto_end = base.find("://").map(|p| p + 3).unwrap_or(0);
+            let base_without_path = &base[..proto_end + base[proto_end..].find('/').map(|p| proto_end + p).unwrap_or(base.len())];
+            format!("{}{}", base_without_path, &first_path[..pos])
+        } else {
+            config.url.clone()
+        }
+    };
+
+    // Pre-fetch cover image for the directory
+    let dir_cover = find_cover_image_in_webdav(config, &dir_path).await;
+
     for path_str in file_paths {
         let full_url = if path_str.starts_with("http") {
             path_str.to_string()
@@ -3060,19 +3169,36 @@ async fn create_webdav_placeholder_tracks(
            .and_then(|s| s.to_str())
            .unwrap_or(&decoded_filename)
            .to_string();
-        
+
+        // Get parent directory for cover search (per-file)
+        let file_dir_path = if let Some(pos) = full_url.rfind('/') {
+            &full_url[..pos + 1]
+        } else {
+            ""
+        };
+
+        // Try to find cover: first in file's directory, then use pre-fetched directory cover
+        let cover = if file_dir_path.is_empty() {
+            dir_cover.clone()
+        } else {
+            match find_cover_image_in_webdav(config, file_dir_path).await {
+                Some(cover) => Some(cover),
+                None => dir_cover.clone(),
+            }
+        };
+
         let track = Track {
             id: uuid::Uuid::new_v4().to_string(),
             path: full_url,
             title: title,
-            artist: "Cloud Stream".to_string(), 
+            artist: "Cloud Stream".to_string(),
             album: "WebDAV".to_string(),
             duration: std::time::Duration::from_secs(0),
-            cover: None,
+            cover,
         };
         tracks.push(track);
     }
-    
+
     Ok(tracks)
 }
 

@@ -1761,6 +1761,7 @@ dependencies = [
  "image",
  "metaflac",
  "mp3-duration",
+ "once_cell",
  "parking_lot",
  "rand 0.8.5",
  "reqwest 0.11.27",
