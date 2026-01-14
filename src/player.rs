@@ -323,7 +323,23 @@ impl MusicPlayer {
                             Ok(source) => {
                                 let duration = source.total_duration().unwrap_or(Duration::from_secs(0));
 
-                                let metadata = TrackMetadata::from_path(&temp_path);
+                                let mut metadata = TrackMetadata::from_path(&temp_path);
+
+                                // 从原始 URL 提取文件名作为标题（如果元数据无效）
+                                if metadata.title.is_none() || metadata.title.as_ref().map_or(false, |t| t.starts_with("dioxus_music_")) {
+                                    let filename = url.split('/').last().unwrap_or("Unknown");
+                                    let decoded_filename = match urlencoding::decode(filename) {
+                                        Ok(cow) => cow.into_owned(),
+                                        Err(_) => filename.to_string(),
+                                    };
+                                    let title = std::path::Path::new(&decoded_filename)
+                                        .file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or(&decoded_filename)
+                                        .to_string();
+                                    metadata.title = Some(title);
+                                }
+
                                 eprintln!("[Player] 流式提取元数据: title={:?}, artist={:?}, duration={:?}",
                                     metadata.title, metadata.artist, duration);
                                 *current_metadata_clone.lock().unwrap() = Some(metadata);
