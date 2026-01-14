@@ -1967,8 +1967,12 @@ fn PlaylistTracks(
 
                 
                                     div { class: "font-semibold truncate", "{track.title}" }
-                                    p { class: "text-xs text-gray-300 truncate", "{track.artist}" }
-                                    p { class: "text-xs text-gray-400", "{format_duration(track.duration)}" }
+                                    if track.artist != "Cloud Stream" {
+                                        p { class: "text-xs text-gray-300 truncate", "{track.artist}" }
+                                    }
+                                    if track.duration.as_secs() > 0 {
+                                        p { class: "text-xs text-gray-400", "{format_duration(track.duration)}" }
+                                    }
                                 }
                             }
                         })
