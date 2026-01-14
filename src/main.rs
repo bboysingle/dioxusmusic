@@ -1205,7 +1205,7 @@ fn App() -> Element {
                         }
                     }
 
-                    section { class: "col-span-2",
+                    section { class: "col-span-1",
 
                         PlayerControls {
                             state: player_state(),
@@ -1334,7 +1334,10 @@ fn App() -> Element {
                                 }
                             }
                         }
+                    }
 
+                    // Right: Playlist tracks
+                    aside { class: "col-span-1 h-[calc(100vh-12rem)] overflow-y-auto",
                         if playlists().len() > current_playlist() {
                             PlaylistTracks {
                                 playlist: playlists()[current_playlist()].clone(),
