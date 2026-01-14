@@ -941,9 +941,9 @@ fn App() -> Element {
                         }
                         "Dioxus Music Player"
                     }
-                    p { class: "text-gray-400",
-                        "Control your music with play, pause, seek, and playlist management"
-                    }
+                    // p { class: "text-gray-400",
+                    // "Control your music with play, pause, seek, and playlist management"
+                    // }
                     div { class: "mt-4 flex gap-2",
                         button {
                             class: "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm",
