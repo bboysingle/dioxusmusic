@@ -1207,27 +1207,6 @@ fn App() -> Element {
 
                     section { class: "col-span-2",
 
-                        NowPlayingCard {
-                            current_track: current_track(),
-                            player_ref: player_ref.clone(),
-                        }
-
-                        if let Some(lyric) = current_lyric() {
-                            LyricsDisplay { current_time, lyric: Some(lyric) }
-                        }
-
-                        // Error message display
-                        if let Some(err) = error_msg() {
-                            div { class: "mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded",
-                                "❌ {err}"
-                                button {
-                                    class: "ml-2 text-red-500 hover:text-red-700",
-                                    onclick: move |_| *error_msg.write() = None,
-                                    "✕"
-                                }
-                            }
-                        }
-
                         PlayerControls {
                             state: player_state(),
                             duration: Some(current_duration()),
@@ -1288,6 +1267,7 @@ fn App() -> Element {
                                             if pos > 0 {
                                                 let prev_track = playlist.tracks[pos - 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
+                                                    player.stop();
                                                     player.set_stopped_by_user(false);
                                                     player
                                                         .play(
@@ -1316,6 +1296,7 @@ fn App() -> Element {
                                             if pos < playlist.tracks.len() - 1 {
                                                 let next_track = playlist.tracks[pos + 1].clone();
                                                 if let Some(ref player) = *player_ref.read() {
+                                                    player.stop();
                                                     player.set_stopped_by_user(false);
                                                     player
                                                         .play(
@@ -1331,6 +1312,27 @@ fn App() -> Element {
                                     }
                                 }
                             },
+                        }
+
+                        NowPlayingCard {
+                            current_track: current_track(),
+                            player_ref: player_ref.clone(),
+                        }
+
+                        if let Some(lyric) = current_lyric() {
+                            LyricsDisplay { current_time, lyric: Some(lyric) }
+                        }
+
+                        // Error message display
+                        if let Some(err) = error_msg() {
+                            div { class: "mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded",
+                                "❌ {err}"
+                                button {
+                                    class: "ml-2 text-red-500 hover:text-red-700",
+                                    onclick: move |_| *error_msg.write() = None,
+                                    "✕"
+                                }
+                            }
                         }
 
                         if playlists().len() > current_playlist() {
