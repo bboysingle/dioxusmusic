@@ -1629,10 +1629,10 @@ fn NowPlayingCard(
         .unwrap_or_else(|| "Unknown Album".to_string());
 
     rsx! {
-        div { class: "bg-gray-800 rounded-lg p-8 mb-6 text-center",
+        div { class: "bg-gray-800 rounded-lg p-6 mb-6 flex items-center gap-6",
 
             if let Some(img_src) = cover_img {
-                div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg overflow-hidden",
+                div { class: "w-40 h-40 flex-shrink-0 rounded-lg shadow-lg overflow-hidden",
                     img {
                         src: img_src,
                         alt: "Album cover",
@@ -1640,13 +1640,16 @@ fn NowPlayingCard(
                     }
                 }
             } else {
-                div { class: "w-48 h-48 mx-auto mb-4 rounded-lg shadow-lg bg-gray-700 flex items-center justify-center text-4xl",
+                div { class: "w-40 h-40 flex-shrink-0 rounded-lg shadow-lg bg-gray-700 flex items-center justify-center text-4xl",
                     "🎵"
                 }
             }
-            h2 { class: "text-2xl font-bold mb-2", "{display_title}" }
-            p { class: "text-gray-400 mb-1", "{display_artist}" }
-            p { class: "text-gray-500 text-sm", "{display_album}" }
+
+            div { class: "flex-1 text-left",
+                h2 { class: "text-2xl font-bold mb-2", "{display_title}" }
+                p { class: "text-gray-400 mb-1", "{display_artist}" }
+                p { class: "text-gray-500 text-sm", "{display_album}" }
+            }
         }
     }
 }
