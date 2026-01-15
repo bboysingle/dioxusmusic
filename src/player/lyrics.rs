@@ -72,6 +72,7 @@ impl Lyric {
     }
 }
 
+#[allow(dead_code)]
 pub async fn search_lyrics(
     title: &str,
     artist: &str,
@@ -132,6 +133,7 @@ pub async fn search_lyrics(
     Ok(None)
 }
 
+#[allow(dead_code)]
 pub async fn search_all_lyrics(
     title: &str,
     artist: &str,
@@ -186,6 +188,7 @@ pub async fn search_all_lyrics(
     Ok(results)
 }
 
+#[allow(dead_code)]
 pub async fn download_lyrics(
     song_id: &str,
 ) -> Result<Lyric, Box<dyn std::error::Error>> {
@@ -359,7 +362,7 @@ pub async fn search_kugou_lyrics(
                 .as_str()
                 .unwrap_or("")
                 .to_string();
-            let album = song["album_name"]
+            let _album = song["album_name"]
                 .as_str()
                 .unwrap_or("")
                 .to_string();

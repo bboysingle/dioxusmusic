@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod lyrics;
-pub use lyrics::{Lyric, LyricLine};
+pub use lyrics::Lyric;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PlayerState {
@@ -19,6 +19,7 @@ const MAX_FILE_SIZE: u64 = 200 * 1024 * 1024; // 200MB limit for streaming
 const STREAMING_MIN_BYTES: u64 = 512 * 1024; // 512KB minimum for streaming playback (increased from 128KB)
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Track {
     pub id: String,
     pub title: String,
@@ -52,7 +53,7 @@ impl TrackMetadata {
         // Try ID3 tags first (MP3, M4A)
         if let Ok(tag) = Tag::read_from_path(path).or_else(|_| {
             let file = File::open(path)?;
-            Tag::read_from(file)
+            Tag::read_from2(file)
         }) {
             metadata.title = tag.title().map(|t| t.to_string()).or(Some(file_name.clone()));
             metadata.artist = tag.artist().map(|a| a.to_string());
@@ -159,6 +160,7 @@ impl Clone for MusicPlayer {
     }
 }
 
+#[allow(dead_code)]
 impl MusicPlayer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let (_stream, stream_handle) = OutputStream::try_default()?;
@@ -589,7 +591,7 @@ impl MusicPlayer {
                             *prog_guard = downloaded as u64;
                         }
                         {
-                            let mut play_guard = player_playing.lock().unwrap();
+                            let play_guard = player_playing.lock().unwrap();
                             if *play_guard && downloaded >= STREAMING_MIN_BYTES as usize {
                                 let _ = tx.send(Ok(temp_path.clone()));
                             }
@@ -1016,6 +1018,7 @@ fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::
     }
 }
 
+#[allow(dead_code)]
 fn play_remote_url_async(url: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, String> {
     let temp_dir = std::env::temp_dir();
     let temp_filename = format!("dioxus_music_{}", uuid::Uuid::new_v4());

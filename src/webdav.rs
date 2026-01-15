@@ -19,6 +19,7 @@ pub struct WebDAVItem {
     pub modified: String,
 }
 
+#[allow(dead_code)]
 impl WebDAVClient {
     pub fn new(base_url: String) -> Self {
         let clean_url = base_url.trim_end_matches('/').to_string();
@@ -165,6 +166,7 @@ impl WebDAVClient {
     }
 }
 
+#[allow(dead_code)]
 fn parse_webdav_response(response: &str) -> Vec<String> {
     // Simple parsing - in production use proper XML parser
     let mut files = Vec::new();
@@ -305,17 +307,11 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
                     String::new()
                 };
 
-                eprintln!("[WebDAV DEBUG] base_sub_path(encoded)='{}'", base_sub_path);
-                eprintln!("[WebDAV DEBUG] after_dav='{}'", after_dav);
-
                 // 如果 base_sub_path 不为空且 after_dav 以它开头，去掉它
                 if !base_sub_path.is_empty() && after_dav.starts_with(&base_sub_path) {
                     let after_base = &after_dav[base_sub_path.len()..];
-                    let result = after_base.trim_start_matches('/').to_string();
-                    eprintln!("[WebDAV DEBUG] 匹配成功，item_path='{}'", result);
-                    result
+                    after_base.trim_start_matches('/').to_string()
                 } else {
-                    eprintln!("[WebDAV DEBUG] 不匹配，保留 after_dav='{}'", after_dav);
                     after_dav.to_string()
                 }
             } else if href.starts_with(base_url) {
@@ -323,8 +319,6 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
             } else {
                 href.trim_start_matches('/').to_string()
             };
-
-            eprintln!("[WebDAV DEBUG] 最终 item_path='{}'", item_path);
 
             items.push(WebDAVItem {
                 name,
@@ -339,6 +333,7 @@ fn parse_webdav_items(response: &str, base_url: &str) -> Vec<WebDAVItem> {
     items
 }
 
+#[allow(dead_code)]
 fn extract_xml_content(xml: &str, tag: &str) -> Option<String> {
     let tag_upper = tag.to_uppercase();
     let tag_lower = tag.to_lowercase();

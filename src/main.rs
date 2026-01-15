@@ -837,10 +837,10 @@ fn App() -> Element {
     let mut webdav_is_loading = use_signal(|| false);
     let mut webdav_error = use_signal(|| Option::<String>::None);
     let mut current_lyric = use_signal(|| None::<player::Lyric>);
-    let mut show_lyrics = use_signal(|| false);
+    let _show_lyrics = use_signal(|| false);
 
     // Auto-play trigger - atomic counter for thread-safe triggering
-    let track_check_trigger: &'static Arc<std::sync::atomic::AtomicUsize> = {
+    let _track_check_trigger: &'static Arc<std::sync::atomic::AtomicUsize> = {
         static TRIGGER: std::sync::OnceLock<Arc<std::sync::atomic::AtomicUsize>> = std::sync::OnceLock::new();
         TRIGGER.get_or_init(|| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
     };
@@ -1671,11 +1671,15 @@ fn LyricsDisplay(
         if !visible_lines.is_empty() {
             div { class: "bg-gray-800 rounded-lg p-6 mb-6 text-center",
                 div { class: "space-y-3 max-h-48 overflow-y-auto",
-                    for (idx, line) in visible_lines.iter().enumerate() {
+                    for (idx , line) in visible_lines.iter().enumerate() {
                         if Some(idx) == current_line_idx {
-                            div { class: "text-xl font-bold text-white transition-colors scale-105", "{line.text}" }
+                            div { class: "text-xl font-bold text-white transition-colors scale-105",
+                                "{line.text}"
+                            }
                         } else {
-                            div { class: "text-sm text-gray-400 transition-colors", "{line.text}" }
+                            div { class: "text-sm text-gray-400 transition-colors",
+                                "{line.text}"
+                            }
                         }
                     }
                 }
@@ -2583,6 +2587,7 @@ struct OldWebDAVConfig {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct ConfigForSave<'a> {
     id: &'a str,
     name: &'a str,
@@ -2603,7 +2608,7 @@ fn load_webdav_configs() -> Result<Vec<WebDAVConfig>, Box<dyn std::error::Error>
         let content = std::fs::read_to_string(&config_file)?;
 
         // 尝试解析新格式
-        let mut configs: Result<Vec<WebDAVConfig>, _> = serde_json::from_str(&content);
+        let configs: Result<Vec<WebDAVConfig>, _> = serde_json::from_str(&content);
 
         // 如果新格式解析失败，尝试旧格式
         if configs.is_err() {
@@ -2902,23 +2907,24 @@ fn WebDAVBrowserModal(
 // Load WebDAV folder items
 async fn load_webdav_folder(config: &WebDAVConfig, path: &str) -> Result<Vec<webdav::WebDAVItem>, Box<dyn std::error::Error>> {
     use webdav::WebDAVClient;
-    
-    let password = match config.get_password() {
-        Ok(p) => {
-            if p.len() == config.encrypted_password.len() {
-                eprintln!("[WebDAV] 解密可能失败: 返回长度与密文相同");
+
+    let password = if config.password.is_none() && !config.encrypted_password.is_empty() {
+        match config.get_password() {
+            Ok(p) => {
+                eprintln!("[WebDAV] 从加密密码解密: username={}, password_len={}", config.username, p.len());
+                p
             }
-            eprintln!("[WebDAV] 解密结果: username={}, password_len={}", config.username, p.len());
-            p
+            Err(e) => {
+                eprintln!("[WebDAV] 解密失败: {}", e);
+                String::new()
+            }
         }
-        Err(e) => {
-            eprintln!("[WebDAV] 解密失败: {}", e);
-            String::new()
-        }
+    } else {
+        config.get_password().unwrap_or_default()
     };
-    
+
     eprintln!("[WebDAV] 准备请求: url={}{}, user={}", config.url, path, config.username);
-    
+
     let client = WebDAVClient::new(config.url.clone())
         .with_auth(config.username.clone(), password);
     
@@ -3295,6 +3301,7 @@ async fn download_and_import_webdav_files(
 }
 
 // Fetch metadata for a single WebDAV file on-demand (when playing)
+#[allow(dead_code)]
 async fn fetch_webdav_track_metadata(
     config: &WebDAVConfig,
     path: &str,
@@ -3353,6 +3360,7 @@ async fn fetch_webdav_track_metadata(
  }
 
  // Play WebDAV track with on-demand metadata fetching
+ #[allow(dead_code)]
  async fn play_webdav_track(
      config: &WebDAVConfig,
      track: &mut Track,
