@@ -310,7 +310,8 @@ impl MusicPlayer {
                         continue;
                     }
 
-                    if downloaded >= STREAMING_MIN_BYTES as usize {
+                    // 统一使用 1MB 阈值，跳过可能的大封面等元数据
+                    if downloaded >= 1024 * 1024 {
                         let file_for_play = match File::open(&temp_path) {
                             Ok(f) => f,
                             Err(e) => {
@@ -389,14 +390,14 @@ impl MusicPlayer {
                             }
                             Err(rodio_error) => {
                                 eprintln!("[Player] 音频解码失败: {} (已下载: {} bytes)", rodio_error, downloaded);
-                                if downloaded < STREAMING_MIN_BYTES as usize * 2 {
-                                    eprintln!("[Player] 数据不足，等待更多数据...");
-                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                
+                                if downloaded >= 1024 * 1024 {
+                                    eprintln!("[Player] 1MB数据已下载但解码失败，等待下载完整文件...");
+                                    started_playing = true;
+                                    continue;
                                 } else {
-                                    eprintln!("[Player] 数据已足够但解码失败，可能是文件格式问题");
-                                    let _ = std::fs::remove_file(&temp_path);
-                                    *is_playing.lock().unwrap() = false;
-                                    return;
+                                    eprintln!("[Player] 数据不足，继续下载...");
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
                                 }
                             }
                         }
