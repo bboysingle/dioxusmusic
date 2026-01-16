@@ -1348,6 +1348,12 @@ fn App() -> Element {
                                     *current_track.write() = Some(track_stub);
                                     *player_state.write() = PlayerState::Playing;
                                 },
+                                on_clear: move |_| {
+                                    let mut playlists_guard = playlists.write();
+                                    if playlists_guard.len() > current_playlist() {
+                                        playlists_guard[current_playlist()].tracks.clear();
+                                    }
+                                },
                             }
                         }
                     }
@@ -1941,47 +1947,63 @@ fn PlaylistTracks(
     playlist: Playlist,
     current_track: Option<TrackStub>,
     on_track_select: EventHandler<TrackStub>,
+    on_clear: EventHandler<()>,
 ) -> Element {
+    let has_tracks = !playlist.tracks.is_empty();
+
     rsx! {
         div { class: "bg-gray-800 rounded-lg p-4",
 
-            h3 { class: "text-lg font-bold mb-4", "🎶 Tracks" }
+            div { class: "flex items-center justify-between mb-4",
+                h3 { class: "text-lg font-bold", "🎶 Tracks" }
+                if has_tracks {
+                    button {
+                        class: "px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm text-white transition-colors",
+                        onclick: move |_| on_clear.call(()),
+                        "🗑️ Clear"
+                    }
+                }
+            }
 
-            div { class: "space-y-2 max-h-96 overflow-y-auto",
-                {
+            if playlist.tracks.is_empty() {
+                div { class: "text-center py-8 text-gray-500", "No tracks in playlist" }
+            } else {
+                div { class: "space-y-2 max-h-96 overflow-y-auto",
+                    {
 
-                    playlist
-                        .tracks
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, track)| {
-                            let track_clone = track.clone();
-                            let is_current = current_track
-                                .as_ref()
-                                .map(|t| t.id == track.id)
-                                .unwrap_or(false);
-                            let class_str = if is_current {
-                                "w-full text-left px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-sm"
-                            } else {
-                                "w-full text-left px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm"
-                            };
-                            rsx! {
-                                button {
-                                    key: "{idx}",
-                                    class: class_str,
-                                    onclick: move |_| on_track_select.call(track_clone.clone()),
+                        playlist
+                            .tracks
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, track)| {
+                                let track_clone = track.clone();
+                                let is_current = current_track
+                                    .as_ref()
+                                    .map(|t| t.id == track.id)
+                                    .unwrap_or(false);
+                                let class_str = if is_current {
+                                    "w-full text-left px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-sm"
+                                } else {
+                                    "w-full text-left px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm"
+                                };
+                                rsx! {
+                                    button {
+                                        key: "{idx}",
+                                        class: class_str,
+                                        onclick: move |_| on_track_select.call(track_clone.clone()),
 
                 
-                                    div { class: "font-semibold truncate", "{track.title}" }
-                                    if track.artist != "Cloud Stream" {
-                                        p { class: "text-xs text-gray-300 truncate", "{track.artist}" }
-                                    }
-                                    if track.duration.as_secs() > 0 {
-                                        p { class: "text-xs text-gray-400", "{format_duration(track.duration)}" }
+                                        div { class: "font-semibold truncate", "{track.title}" }
+                                        if track.artist != "Cloud Stream" {
+                                            p { class: "text-xs text-gray-300 truncate", "{track.artist}" }
+                                        }
+                                        if track.duration.as_secs() > 0 {
+                                            p { class: "text-xs text-gray-400", "{format_duration(track.duration)}" }
+                                        }
                                     }
                                 }
-                            }
-                        })
+                            })
+                    }
                 }
             }
         }
