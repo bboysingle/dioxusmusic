@@ -3105,7 +3105,7 @@ async fn create_webdav_placeholder_tracks(
     file_paths: &[String],
 ) -> Result<Vec<Track>, Box<dyn std::error::Error>> {
     let mut tracks = Vec::new();
-    
+
     let password = config.get_password()?;
 
     let mut base_url = reqwest::Url::parse(&config.url)?;
@@ -3117,7 +3117,7 @@ async fn create_webdav_placeholder_tracks(
         }
     }
 
-    // Get directory path for cover search
+    // Get directory path for cover search (only once for all files)
     let dir_path = if file_paths.is_empty() {
         config.url.clone()
     } else {
@@ -3132,7 +3132,7 @@ async fn create_webdav_placeholder_tracks(
         }
     };
 
-    // Pre-fetch cover image for the directory
+    // Pre-fetch cover image once for the entire directory (not per-file)
     let dir_cover = find_cover_image_in_webdav(config, &dir_path).await;
 
     for path_str in file_paths {
@@ -3172,23 +3172,6 @@ async fn create_webdav_placeholder_tracks(
            .unwrap_or(&decoded_filename)
            .to_string();
 
-        // Get parent directory for cover search (per-file)
-        let file_dir_path = if let Some(pos) = full_url.rfind('/') {
-            &full_url[..pos + 1]
-        } else {
-            ""
-        };
-
-        // Try to find cover: first in file's directory, then use pre-fetched directory cover
-        let cover = if file_dir_path.is_empty() {
-            dir_cover.clone()
-        } else {
-            match find_cover_image_in_webdav(config, file_dir_path).await {
-                Some(cover) => Some(cover),
-                None => dir_cover.clone(),
-            }
-        };
-
         let track = Track {
             id: uuid::Uuid::new_v4().to_string(),
             path: full_url,
@@ -3196,7 +3179,7 @@ async fn create_webdav_placeholder_tracks(
             artist: "Cloud Stream".to_string(),
             album: "WebDAV".to_string(),
             duration: std::time::Duration::from_secs(0),
-            cover,
+            cover: dir_cover.clone(),
         };
         tracks.push(track);
     }
