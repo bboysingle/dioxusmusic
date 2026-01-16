@@ -428,6 +428,7 @@ impl MusicPlayer {
                                 audio_sink.append(source);
                                 audio_sink.play();
                                 *playback_started.lock().unwrap() = true;
+                                *playback_start.lock().unwrap() = Some(std::time::Instant::now());
 
                                 *current_duration.lock().unwrap() = duration;
                                 *current_path.lock().unwrap() = Some(path);
