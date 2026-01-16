@@ -20,18 +20,16 @@ static WEBDAV_COVER_CACHE: Lazy<std::sync::Mutex<std::collections::HashMap<Strin
     Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn load_header_icon() -> Option<String> {
-    std::fs::read("assets/rmusic.ico")
+    let icon_data: &[u8] = include_bytes!("../assets/rmusic.ico");
+
+    image::load_from_memory_with_format(icon_data, image::ImageFormat::Ico)
         .ok()
-        .and_then(|data| {
-            image::load_from_memory_with_format(&data, image::ImageFormat::Ico).ok()
-        })
         .and_then(|image| {
             let rgba = image.to_rgba8();
             dioxus_desktop::tao::window::Icon::from_rgba(rgba.into_raw(), image.width(), image.height()).ok()
         })
         .and_then(|_| {
-            let data = std::fs::read("assets/rmusic.ico").ok()?;
-            let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+            let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, icon_data);
             Some(format!("data:image/x-icon;base64,{}", base64))
         })
 }
@@ -158,24 +156,13 @@ fn main() {
     use dioxus::prelude::VirtualDom;
     use dioxus_desktop::{Config, WindowBuilder};
 
-    let icon_path = std::path::Path::new("assets/rmusic.ico");
+    let icon_data: &[u8] = include_bytes!("../assets/rmusic.ico");
 
-    eprintln!("[DEBUG] Icon exists: {}", icon_path.exists());
-
-    let icon = std::fs::read(icon_path)
+    let icon = image::load_from_memory_with_format(icon_data, image::ImageFormat::Ico)
         .ok()
-        .and_then(|data| {
-            eprintln!("[DEBUG] Icon file size: {} bytes", data.len());
-
-            let images = image::load_from_memory_with_format(&data, image::ImageFormat::Ico).ok()?;
-
-            eprintln!("[DEBUG] Image dimensions: {}x{}", images.width(), images.height());
-
+        .and_then(|images| {
             let rgba = images.to_rgba8();
             let (width, height) = (images.width(), images.height());
-
-            eprintln!("[DEBUG] Creating icon {}x{}", width, height);
-
             dioxus_desktop::tao::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
         });
 
