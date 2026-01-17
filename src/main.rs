@@ -2134,6 +2134,7 @@ fn is_valid_image(data: &[u8]) -> bool {
 // Scan directory for music files
 pub fn scan_music_directory(path: &str) -> Result<Vec<TrackStub>, Box<dyn std::error::Error>> {
     let mut tracks = Vec::new();
+    let mut cover_cache = std::collections::HashMap::new();
 
     for entry in WalkDir::new(path)
         .into_iter()
@@ -2148,14 +2149,23 @@ pub fn scan_music_directory(path: &str) -> Result<Vec<TrackStub>, Box<dyn std::e
                     Ok(mut track) => {
                         // If no cover from metadata, try to find in directory
                         if track.cover.is_none() {
-                            if let Some(dir_cover) = path.parent().and_then(find_cover_image_in_dir) {
-                                track.cover = Some(dir_cover);
+                            if let Some(parent) = path.parent() {
+                                let cached = cover_cache.entry(parent.to_path_buf())
+                                    .or_insert_with(|| find_cover_image_in_dir(parent));
+                                track.cover = cached.clone();
                             }
                         }
                         TrackStub::from(track)
                     },
                     Err(_) => {
-                        let cover = path.parent().and_then(find_cover_image_in_dir);
+                        let cover = if let Some(parent) = path.parent() {
+                            cover_cache.entry(parent.to_path_buf())
+                                .or_insert_with(|| find_cover_image_in_dir(parent))
+                                .clone()
+                        } else {
+                            None
+                        };
+                        
                         TrackStub {
                             id: Uuid::new_v4().to_string(),
                             path: path.to_string_lossy().to_string(),

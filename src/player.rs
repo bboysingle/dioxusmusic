@@ -1,4 +1,4 @@
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -90,8 +90,7 @@ impl TrackMetadata {
 
         // Get duration
         if let Ok(file) = File::open(path) {
-            let reader = BufReader::new(file);
-            if let Ok(source) = Decoder::new(reader) {
+            if let Ok(source) = Decoder::try_from(file) {
                 metadata.duration = source.total_duration().unwrap_or(Duration::from_secs(0));
             }
         }
@@ -106,7 +105,7 @@ impl TrackMetadata {
 
 pub struct MusicPlayer {
     sink: Arc<Mutex<Option<Sink>>>,
-    _stream: OutputStream,
+    _stream: Arc<Mutex<OutputStream>>,
     current_duration: Arc<Mutex<Duration>>,
     current_time: Arc<Mutex<Duration>>,
     current_path: Arc<Mutex<Option<PathBuf>>>,
@@ -134,7 +133,7 @@ impl Clone for MusicPlayer {
     fn clone(&self) -> Self {
         MusicPlayer {
             sink: Arc::clone(&self.sink),
-            _stream: OutputStream::try_default().unwrap_or_else(|_| panic!("Failed to create output stream")).0,
+            _stream: Arc::clone(&self._stream),
             current_duration: Arc::clone(&self.current_duration),
             current_time: Arc::clone(&self.current_time),
             current_path: Arc::clone(&self.current_path),
@@ -163,12 +162,12 @@ impl Clone for MusicPlayer {
 #[allow(dead_code)]
 impl MusicPlayer {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let (_stream, stream_handle) = OutputStream::try_default()?;
-        let sink = Sink::try_new(&stream_handle)?;
+        let stream = OutputStreamBuilder::open_default_stream()?;
+        let sink = Sink::connect_new(&stream.mixer());
 
         Ok(MusicPlayer {
             sink: Arc::new(Mutex::new(Some(sink))),
-            _stream,
+            _stream: Arc::new(Mutex::new(stream)),
             current_duration: Arc::new(Mutex::new(Duration::from_secs(0))),
             current_time: Arc::new(Mutex::new(Duration::from_secs(0))),
             current_path: Arc::new(Mutex::new(None)),
@@ -471,7 +470,7 @@ impl MusicPlayer {
         }
     }
 
-    fn play_local_file(&self, path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, Box<dyn std::error::Error>> {
+    fn play_local_file(&self, path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, Box<dyn std::error::Error>> {
         let metadata = std::fs::metadata(path)
             .map_err(|e| format!("无法访问文件 '{}': {}", path.display(), e))?;
 
@@ -493,12 +492,10 @@ impl MusicPlayer {
                               file_size / (1024 * 1024), MAX_FILE_SIZE / (1024 * 1024)).into());
         }
 
-        let buf_reader = BufReader::new(file);
-        
         match std::panic::catch_unwind(|| {
-            Decoder::new(buf_reader)
+            Decoder::try_from(file)
         }) {
-            Ok(Ok(source)) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+            Ok(Ok(source)) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>),
             Ok(Err(rodio_error)) => {
                 Err(format!("音频解码失败 '{}': {}. 文件大小: {} bytes, 扩展名: {}",
                           path.display(), rodio_error, file_size, extension).into())
@@ -510,7 +507,7 @@ impl MusicPlayer {
         }
     }
 
-    fn play_remote_url(&self, url: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, Box<dyn std::error::Error>> {
+    fn play_remote_url(&self, url: &str) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, Box<dyn std::error::Error>> {
         eprintln!("[Player] 从URL下载音频: {}", url);
 
         let url = url.to_string();
@@ -642,7 +639,7 @@ impl MusicPlayer {
                     }
                     *temp_guard = Some(temp_path.clone());
                 }
-                Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>)
+                Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>)
             }
             Ok(Err(rodio_error)) => {
                 let _ = std::fs::remove_file(&temp_path);
@@ -874,7 +871,7 @@ impl MusicPlayer {
         Err("Failed to seek".into())
     }
     
-    fn play_local_file_with_seek(&self, path: &Path, extension: &str, seek_time: Duration) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, Box<dyn std::error::Error>> {
+    fn play_local_file_with_seek(&self, path: &Path, extension: &str, seek_time: Duration) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, Box<dyn std::error::Error>> {
         match extension {
             "mp3" => {
                 let file = std::fs::File::open(path)?;
@@ -893,7 +890,7 @@ impl MusicPlayer {
                 }
                 
                 match Decoder::new(file) {
-                    Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+                    Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>),
                     Err(e) => Err(format!("Failed to decode MP3: {}", e).into()),
                 }
             }
@@ -914,7 +911,7 @@ impl MusicPlayer {
                 }
                 
                 match Decoder::new_wav(cursor) {
-                    Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+                    Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>),
                     Err(e) => Err(format!("Failed to decode WAV: {}", e).into()),
                 }
             }
@@ -987,7 +984,7 @@ impl MusicPlayer {
     }
 }
 
-fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, String> {
+fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, String> {
     let metadata = std::fs::metadata(path)
         .map_err(|e| format!("无法访问文件 '{}': {}", path.display(), e))?;
 
@@ -1012,7 +1009,7 @@ fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::
     let buf_reader = BufReader::new(file);
 
     match Decoder::new(buf_reader) {
-        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>),
         Err(rodio_error) => {
             Err(format!("音频解码失败 '{}': {}. 文件大小: {} bytes, 扩展名: {}",
                       path.display(), rodio_error, file_size, extension))
@@ -1021,7 +1018,7 @@ fn play_local_file_async(path: &Path, extension: &str) -> Result<Box<dyn rodio::
 }
 
 #[allow(dead_code)]
-fn play_remote_url_async(url: &str) -> Result<Box<dyn rodio::Source<Item = i16> + Send>, String> {
+fn play_remote_url_async(url: &str) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, String> {
     let temp_dir = std::env::temp_dir();
     let temp_filename = format!("dioxus_music_{}", uuid::Uuid::new_v4());
     let temp_path = temp_dir.join(&temp_filename);
@@ -1075,10 +1072,8 @@ fn play_remote_url_async(url: &str) -> Result<Box<dyn rodio::Source<Item = i16> 
     let file = File::open(&temp_path)
         .map_err(|e| format!("无法打开临时文件: {}", e))?;
 
-    let buf_reader = BufReader::new(file);
-
-    match Decoder::new(buf_reader) {
-        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = i16> + Send>),
+    match Decoder::try_from(file) {
+        Ok(source) => Ok(Box::new(source) as Box<dyn rodio::Source<Item = f32> + Send>),
         Err(rodio_error) => {
             let _ = std::fs::remove_file(&temp_path);
             let file_size = std::fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);

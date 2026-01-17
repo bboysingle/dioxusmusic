@@ -93,10 +93,9 @@ pub fn extract_metadata(path: &Path) -> Result<Track, Box<dyn std::error::Error>
 fn get_duration(path: &Path) -> Result<Duration, Box<dyn std::error::Error>> {
     use rodio::Decoder;
     use std::fs::File;
-    use std::io::BufReader;
 
-    let file = BufReader::new(File::open(path)?);
-    let source = Decoder::new(file)?;
+    let file = File::open(path)?;
+    let source = Decoder::try_from(file)?;
     Ok(source.total_duration().unwrap_or(Duration::from_secs(0)))
 }
 

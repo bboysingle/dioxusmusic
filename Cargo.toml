@@ -9,7 +9,7 @@ edition = "2021"
 [dependencies]
 dioxus = { version = "0.7.1", features = [] }
 dioxus-desktop = "0.7"
-rodio = "0.18"
+rodio = "0.21"
 metaflac = "0.2"
 id3 = "1.16"
 walkdir = "2"
